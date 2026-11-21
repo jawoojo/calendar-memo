@@ -21,6 +21,7 @@ import {
   getSelectedCells,
 } from "../src/editor/clipboardAndHistory";
 import { RecurringEvent } from "../src/types";
+import { matchEmojiHighlightPrefix } from "../src/ui/highlightHelper";
 
 describe("dateUtils & custom Daily Notes date formats", () => {
   it("handles local date arithmetic without timezone drift", () => {
@@ -263,6 +264,27 @@ describe("2D Excel selection, external clipboard format, and Undo/Redo", () => {
 
     const redone = history.popRedo();
     expect(redone?.label).toBe("색상 변경");
+  });
+});
+
+describe("Emoji-prefix highlight helper", () => {
+  it("matches color emoji prefixes and strips prefix cleanly", () => {
+    expect(matchEmojiHighlightPrefix("🔵파란색 내용")).toEqual({
+      color: "blue",
+      strippedText: "파란색 내용",
+      prefixLength: "🔵".length,
+    });
+    expect(matchEmojiHighlightPrefix("🟠 주황색 내용")).toEqual({
+      color: "orange",
+      strippedText: "주황색 내용",
+      prefixLength: "🟠".length + 1,
+    });
+    expect(matchEmojiHighlightPrefix("🟢ㅏㅡ,,ㅡ")).toEqual({
+      color: "green",
+      strippedText: "ㅏㅡ,,ㅡ",
+      prefixLength: "🟢".length,
+    });
+    expect(matchEmojiHighlightPrefix("일반 노란 하이라이트")).toBeNull();
   });
 });
 

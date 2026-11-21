@@ -46,6 +46,7 @@ import {
   RecurringEventsModal,
   TabConfigModal,
 } from "./modals";
+import { applyEmojiHighlightsToPreview } from "./highlightHelper";
 import type CalendarMemoPlugin from "../main";
 
 // [ID 5.1] 메모잇 스타일 무한 스크롤 캘린더 그리드 뷰
@@ -772,8 +773,8 @@ export class CalendarMemoView extends ItemView {
       }
     }
 
-    // 3) 마크다운 메모 미리보기 컨테이너
-    cellEl.createDiv({ cls: "cm-cell-preview" });
+    // 3) 마크다운 메모 미리보기 컨테이너 (markdown-rendered 추가로 읽기 뷰 스니펫·플러그인 스타일 호환)
+    cellEl.createDiv({ cls: "cm-cell-preview markdown-rendered" });
     void this.refreshCellContent(dateKey, cellEl);
   }
 
@@ -839,6 +840,9 @@ export class CalendarMemoView extends ItemView {
       comp.unload();
       return;
     }
+
+    // [ID 5.4.1] 이모지 접두어 하이라이트(==🔵내용== 등) 경량 색상 적용
+    applyEmojiHighlightsToPreview(previewEl);
 
     // 셀 미리보기에서 체크박스 즉시 클릭 토글 바인딩
     const checkboxes = previewEl.querySelectorAll<HTMLInputElement>(

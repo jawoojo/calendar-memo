@@ -552,6 +552,24 @@ button.cm-color-swatch.cm-swatch-gray, .cm-dot-gray { background-color: #64748b;
   cursor: pointer;
 }
 
+/* [ID 5.4.1] 이모지 접두어 하이라이트 색상 (라이트·다크 테마 양용) */
+.cm-cell-preview mark.cm-hl {
+  padding: 0 3px;
+  border-radius: 3px;
+  color: inherit;
+}
+
+.cm-cell-preview mark.cm-hl-red { background-color: rgba(244, 63, 94, 0.30); }
+.cm-cell-preview mark.cm-hl-orange { background-color: rgba(249, 115, 22, 0.32); }
+.cm-cell-preview mark.cm-hl-yellow { background-color: rgba(234, 179, 8, 0.34); }
+.cm-cell-preview mark.cm-hl-green { background-color: rgba(34, 197, 94, 0.28); }
+.cm-cell-preview mark.cm-hl-cyan { background-color: rgba(6, 182, 212, 0.30); }
+.cm-cell-preview mark.cm-hl-blue { background-color: rgba(59, 130, 246, 0.32); }
+.cm-cell-preview mark.cm-hl-purple { background-color: rgba(168, 85, 247, 0.32); }
+.cm-cell-preview mark.cm-hl-pink { background-color: rgba(236, 72, 153, 0.30); }
+.cm-cell-preview mark.cm-hl-brown { background-color: rgba(180, 83, 9, 0.32); }
+.cm-cell-preview mark.cm-hl-gray { background-color: rgba(148, 163, 184, 0.32); }
+
 /* =========================================================================
  * [ID 6.5] 메모잇 스타일 플로팅 팝오버 + 네이티브 에디터 호스트
  * ========================================================================= */

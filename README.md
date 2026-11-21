@@ -39,3 +39,4 @@ npm test
 ```env
 OBSIDIAN_VAULT_PATH=/path/to/your/obsidian-vault
 ```
+
