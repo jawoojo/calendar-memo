@@ -1,0 +1,801 @@
+/* [ID 5.6] Calendar Memo (메모잇 스타일) 전용 스타일시트
+ * -> 옵시디언 CSS 변수를 기반으로 라이트·다크 테마 및 커뮤니티 테마와 자연스럽게 어우러지도록 설계함.
+ */
+
+.cm-view-container {
+  padding: 0 !important;
+  overflow: hidden !important;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.cm-root {
+  --cm-visible-weeks: 5;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  width: 100%;
+  background: var(--background-primary);
+  color: var(--text-normal);
+  user-select: none;
+}
+
+/* =========================================================================
+ * 상단 폴더 탭 바
+ * ========================================================================= */
+.cm-tab-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px 6px;
+  background: var(--background-secondary);
+  border-bottom: 1px solid var(--background-modifier-border);
+  overflow-x: auto;
+  flex-shrink: 0;
+}
+
+.cm-tab-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-muted);
+  background: transparent;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+
+.cm-tab-item:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.cm-tab-item.is-active {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+}
+
+.cm-tab-edit-btn {
+  display: inline-flex;
+  align-items: center;
+  opacity: 0.8;
+  padding: 2px;
+  border-radius: 4px;
+}
+
+.cm-tab-edit-btn:hover {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.cm-tab-edit-btn svg {
+  width: 12px;
+  height: 12px;
+}
+
+.cm-tab-add-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px dashed var(--background-modifier-border);
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+  box-shadow: none;
+}
+
+.cm-tab-add-btn:hover {
+  color: var(--text-normal);
+  border-color: var(--interactive-accent);
+  background: var(--background-modifier-hover);
+}
+
+.cm-tab-add-btn svg {
+  width: 13px;
+  height: 13px;
+}
+
+/* =========================================================================
+ * 내비게이션 & 툴바
+ * ========================================================================= */
+.cm-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 6px 12px;
+  background: var(--background-primary);
+  border-bottom: 1px solid var(--background-modifier-border);
+  flex-shrink: 0;
+}
+
+.cm-toolbar-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.cm-toolbar-right {
+  flex-wrap: wrap;
+}
+
+.cm-month-title-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.cm-month-title {
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  padding: 2px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  min-width: 108px;
+  text-align: center;
+}
+
+.cm-month-title:hover {
+  background: var(--background-modifier-hover);
+}
+
+.cm-month-picker-hidden {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+  width: 1px;
+  height: 1px;
+}
+
+.cm-icon-btn,
+.cm-toolbar-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 4px 8px;
+  font-size: 12px;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-normal);
+  border: 1px solid transparent;
+  cursor: pointer;
+  box-shadow: none;
+}
+
+.cm-icon-btn {
+  padding: 4px 6px;
+}
+
+.cm-icon-btn svg,
+.cm-btn-icon svg {
+  width: 15px;
+  height: 15px;
+}
+
+.cm-btn-icon {
+  display: inline-flex;
+  align-items: center;
+}
+
+.cm-icon-btn:hover:not(:disabled),
+.cm-toolbar-btn:hover:not(:disabled) {
+  background: var(--background-modifier-hover);
+  border-color: var(--background-modifier-border);
+}
+
+.cm-icon-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.cm-toolbar-divider {
+  width: 1px;
+  height: 18px;
+  background: var(--background-modifier-border);
+  margin: 0 2px;
+}
+
+/* [ID 7.2.1] 셀 배경색 팔레트 스와치 (옵시디언 기본 button 배경색 우선순위 방어) */
+.cm-color-palette {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 6px;
+  border-radius: 8px;
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+}
+
+button.cm-color-swatch {
+  width: 18px;
+  height: 18px;
+  min-width: 18px;
+  min-height: 18px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1.5px solid rgba(128, 128, 128, 0.35);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: none;
+  opacity: 0.92;
+  transition: transform 0.1s ease, opacity 0.1s ease, box-shadow 0.1s ease;
+}
+
+button.cm-color-swatch:hover {
+  transform: scale(1.18);
+  opacity: 1;
+  box-shadow: 0 0 0 2px var(--background-primary), 0 0 0 3.5px var(--interactive-accent);
+}
+
+button.cm-color-swatch.is-clear {
+  background-color: var(--background-primary);
+  color: var(--text-muted);
+}
+
+button.cm-color-swatch.is-clear svg {
+  width: 11px;
+  height: 11px;
+}
+
+button.cm-color-swatch.cm-swatch-rose, .cm-dot-rose { background-color: #f43f5e; }
+button.cm-color-swatch.cm-swatch-amber, .cm-dot-amber { background-color: #f59e0b; }
+button.cm-color-swatch.cm-swatch-yellow, .cm-dot-yellow { background-color: #eab308; }
+button.cm-color-swatch.cm-swatch-green, .cm-dot-green { background-color: #22c55e; }
+button.cm-color-swatch.cm-swatch-teal, .cm-dot-teal { background-color: #14b8a6; }
+button.cm-color-swatch.cm-swatch-blue, .cm-dot-blue { background-color: #3b82f6; }
+button.cm-color-swatch.cm-swatch-purple, .cm-dot-purple { background-color: #a855f7; }
+button.cm-color-swatch.cm-swatch-gray, .cm-dot-gray { background-color: #64748b; }
+
+/* =========================================================================
+ * 요일 헤더 & 무한 스크롤 그리드
+ * [ID 5.2.1] 요일 헤더를 .cm-grid-scroll 내부 sticky로 두어 스크롤바 너비 오차 없이
+ *            아래 날짜 셀 7열과 1px 단위까지 정확히 세로선을 맞춤.
+ * ========================================================================= */
+.cm-weekday-header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  border-bottom: 1px solid var(--background-modifier-border);
+  background: var(--background-secondary);
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.cm-weekday-cell {
+  text-align: center;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 5px 4px;
+  color: var(--text-muted);
+  border-right: 1px solid var(--background-modifier-border);
+  box-sizing: border-box;
+}
+
+.cm-weekday-cell:last-child {
+  border-right: none;
+}
+
+.cm-weekday-cell.is-sunday {
+  color: var(--color-red, #e5484d);
+}
+
+.cm-weekday-cell.is-saturday {
+  color: var(--color-blue, #3b82f6);
+}
+
+.cm-grid-scroll {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  outline: none;
+  position: relative;
+}
+
+.cm-grid-body {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.cm-week-row {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  height: calc((100vh - 155px) / var(--cm-visible-weeks));
+  min-height: 118px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  box-sizing: border-box;
+}
+
+.cm-day-cell {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  padding: 4px 6px;
+  border-right: 1px solid var(--background-modifier-border);
+  background: var(--background-primary);
+  overflow: hidden;
+  cursor: default;
+  box-sizing: border-box;
+  transition: background-color 0.08s ease;
+}
+
+.cm-day-cell:last-child {
+  border-right: none;
+}
+
+/* 짝수달 은은한 배경 음영으로 끊김 없는 스크롤 속에서도 월 경계를 구분 */
+.cm-day-cell.is-alt-month {
+  background: var(--background-primary-alt, rgba(128, 128, 128, 0.04));
+}
+
+/* 셀 사용자 배경색 (다크/라이트 양용 알파 틴트) */
+.cm-day-cell.cm-bg-rose { background-color: rgba(244, 63, 94, 0.14); }
+.cm-day-cell.cm-bg-amber { background-color: rgba(245, 158, 11, 0.15); }
+.cm-day-cell.cm-bg-yellow { background-color: rgba(234, 179, 8, 0.16); }
+.cm-day-cell.cm-bg-green { background-color: rgba(34, 197, 94, 0.14); }
+.cm-day-cell.cm-bg-teal { background-color: rgba(20, 184, 166, 0.14); }
+.cm-day-cell.cm-bg-blue { background-color: rgba(59, 130, 246, 0.14); }
+.cm-day-cell.cm-bg-purple { background-color: rgba(168, 85, 247, 0.14); }
+.cm-day-cell.cm-bg-gray { background-color: rgba(100, 116, 139, 0.15); }
+
+/* 2D 직사각형 다중 선택 & 포커스 셀 */
+.cm-day-cell.is-selected::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: hsla(var(--accent-h), var(--accent-s), var(--accent-l), 0.12);
+  pointer-events: none;
+}
+
+.cm-day-cell.is-focused {
+  box-shadow: inset 0 0 0 2px var(--interactive-accent);
+  z-index: 2;
+}
+
+/* 셀 상단 날짜·공휴일·음력 헤더 */
+.cm-cell-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  margin-bottom: 3px;
+  flex-shrink: 0;
+}
+
+.cm-date-num {
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
+  color: var(--text-normal);
+  white-space: nowrap;
+}
+
+.cm-date-num.is-month-first {
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--background-modifier-border);
+}
+
+.cm-day-cell.is-sunday .cm-date-num,
+.cm-day-cell.is-holiday .cm-date-num {
+  color: var(--color-red, #e5484d);
+}
+
+.cm-day-cell.is-saturday:not(.is-holiday) .cm-date-num {
+  color: var(--color-blue, #3b82f6);
+}
+
+.cm-day-cell.is-today .cm-date-num {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent) !important;
+  padding: 1px 6px;
+  border-radius: 999px;
+}
+
+.cm-cell-meta {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.cm-holiday-label {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--color-red, #e5484d);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cm-anniversary-label {
+  font-size: 10.5px;
+  color: var(--text-accent);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cm-lunar-label {
+  font-size: 10px;
+  color: var(--text-faint);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* 반복 일정 오버레이 리스트 */
+.cm-recurring-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 3px;
+  flex-shrink: 0;
+}
+
+.cm-recurring-item {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 1.3;
+  cursor: pointer;
+  border-left: 2.5px solid var(--interactive-accent);
+  background: var(--background-secondary);
+  overflow: hidden;
+}
+
+.cm-recurring-item:hover {
+  filter: brightness(0.95);
+}
+
+.cm-recurring-item.is-completed {
+  opacity: 0.55;
+  text-decoration: line-through;
+}
+
+.cm-recurring-check {
+  font-size: 10px;
+  flex-shrink: 0;
+  opacity: 0.75;
+}
+
+.cm-recurring-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cm-rec-rose { border-left-color: #f43f5e; background: rgba(244, 63, 94, 0.12); }
+.cm-rec-amber { border-left-color: #f59e0b; background: rgba(245, 158, 11, 0.13); }
+.cm-rec-yellow { border-left-color: #eab308; background: rgba(234, 179, 8, 0.14); }
+.cm-rec-green { border-left-color: #22c55e; background: rgba(34, 197, 94, 0.12); }
+.cm-rec-teal { border-left-color: #14b8a6; background: rgba(20, 184, 166, 0.12); }
+.cm-rec-blue { border-left-color: #3b82f6; background: rgba(59, 130, 246, 0.12); }
+.cm-rec-purple { border-left-color: #a855f7; background: rgba(168, 85, 247, 0.12); }
+.cm-rec-gray { border-left-color: #64748b; background: rgba(100, 116, 139, 0.13); }
+
+/* 셀 내부 마크다운 미리보기 */
+.cm-cell-preview {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-normal);
+  word-break: break-word;
+}
+
+.cm-cell-preview::-webkit-scrollbar {
+  width: 3px;
+}
+
+.cm-cell-preview p,
+.cm-cell-preview ul,
+.cm-cell-preview ol,
+.cm-cell-preview blockquote,
+.cm-cell-preview pre,
+.cm-cell-preview h1,
+.cm-cell-preview h2,
+.cm-cell-preview h3,
+.cm-cell-preview h4 {
+  margin: 0 0 2px 0;
+}
+
+.cm-cell-preview h1,
+.cm-cell-preview h2,
+.cm-cell-preview h3,
+.cm-cell-preview h4 {
+  font-size: 12.5px;
+  font-weight: 700;
+}
+
+.cm-cell-preview ul,
+.cm-cell-preview ol {
+  padding-left: 16px;
+}
+
+.cm-cell-preview ul.contains-task-list {
+  padding-left: 2px;
+  list-style: none;
+}
+
+.cm-cell-preview li.task-list-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.cm-cell-preview input.task-list-item-checkbox {
+  margin: 2px 0 0 0;
+  cursor: pointer;
+}
+
+/* =========================================================================
+ * [ID 6.5] 메모잇 스타일 플로팅 팝오버 + 네이티브 에디터 호스트
+ * ========================================================================= */
+.cm-popover {
+  position: fixed;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  background: var(--background-primary);
+  border: 1.5px solid var(--interactive-accent);
+  border-radius: 10px;
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.28), 0 2px 10px rgba(0, 0, 0, 0.14);
+  overflow: hidden;
+  animation: cm-popover-in 0.11s ease-out;
+}
+
+@keyframes cm-popover-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.cm-popover-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 10px;
+  background: var(--background-secondary);
+  border-bottom: 1px solid var(--background-modifier-border);
+  flex-shrink: 0;
+}
+
+.cm-popover-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.cm-popover-date-title {
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.cm-popover-date-title.is-holiday {
+  color: var(--color-red, #e5484d);
+}
+
+.cm-popover-holiday-badge {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-red, #e5484d);
+  background: rgba(229, 72, 77, 0.12);
+  padding: 1px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cm-popover-lunar-badge {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.cm-popover-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.cm-popover-hint {
+  font-size: 11px;
+  color: var(--text-faint);
+  margin-right: 4px;
+}
+
+.cm-popover-editor-host {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  user-select: text;
+}
+
+.cm-popover-editor-host .cm-editor {
+  flex: 1;
+  height: 100%;
+  background: transparent;
+}
+
+.cm-popover-editor-host .cm-scroller {
+  font-family: var(--font-text);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.cm-popover-editor-host .workspace-leaf {
+  height: 100%;
+}
+
+.cm-popover-editor-host .view-header {
+  display: none;
+}
+
+.cm-popover-textarea-fallback {
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  resize: none;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text-normal);
+  font-family: var(--font-text);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+/* =========================================================================
+ * 모달 UI (폴더 탭 / 반복 일정 / 커스텀 휴일)
+ * ========================================================================= */
+.cm-modal .cm-format-preview {
+  font-size: 12px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--background-secondary);
+  color: var(--text-muted);
+  margin-bottom: 12px;
+  font-family: var(--font-monospace);
+  word-break: break-all;
+}
+
+.cm-modal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.cm-spacer {
+  flex: 1;
+}
+
+.cm-form-box {
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--background-modifier-border);
+  background: var(--background-secondary);
+  margin-bottom: 14px;
+}
+
+.cm-section-heading {
+  margin: 12px 0 8px;
+  font-size: 14px;
+}
+
+.cm-list-box {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.cm-list-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--background-modifier-border);
+  background: var(--background-primary);
+}
+
+.cm-list-info {
+  min-width: 0;
+  flex: 1;
+}
+
+.cm-list-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.cm-color-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+.cm-list-sub {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.cm-list-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.cm-empty-hint {
+  font-size: 12.5px;
+  color: var(--text-muted);
+  text-align: center;
+  padding: 16px;
+}
+
+.cm-weekday-picker {
+  display: flex;
+  gap: 4px;
+}
+
+.cm-weekday-btn {
+  width: 30px;
+  height: 28px;
+  padding: 0;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.cm-weekday-btn.is-active {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+}
+

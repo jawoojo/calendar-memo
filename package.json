@@ -1,0 +1,35 @@
+{
+  "name": "calendar-memo",
+  "version": "1.0.0",
+  "description": "Memoit-style infinite scrolling calendar memo plugin for Obsidian with native Live Preview popover editor",
+  "main": "main.js",
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
+    "test": "vitest run"
+  },
+  "keywords": [
+    "obsidian",
+    "plugin",
+    "calendar",
+    "memo",
+    "memoit",
+    "korean-holidays"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@hangukit/holidays-core": "^0.1.0",
+    "korean-lunar-calendar": "^0.4.0"
+  },
+  "devDependencies": {
+    "@codemirror/state": "^6.4.1",
+    "@codemirror/view": "^6.28.4",
+    "@types/node": "^22.0.0",
+    "builtin-modules": "^4.0.0",
+    "esbuild": "^0.24.2",
+    "obsidian": "latest",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}
+
