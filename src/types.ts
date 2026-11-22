@@ -7,6 +7,25 @@ export type LunarDisplayMode = "off" | "periodic" | "always";
 
 export type RecurringFrequency = "daily" | "weekly" | "monthly" | "businessDay";
 
+export type PopoverSizePreset = "small" | "medium" | "large" | "custom";
+
+export interface PopoverSizeConfig {
+  preset: PopoverSizePreset;
+  width: number;
+  height: number;
+}
+
+// [ID 6.6] 편집 팝오버 소/중/대 크기 프리셋 정의
+// -> 사용자가 클릭 한 번으로 전환하거나 드래그로 커스텀 조절한 크기를 data.json에 영속화함.
+export const POPOVER_SIZE_PRESETS: Record<
+  Exclude<PopoverSizePreset, "custom">,
+  { label: string; width: number; height: number }
+> = {
+  small: { label: "소", width: 360, height: 260 },
+  medium: { label: "중", width: 460, height: 360 },
+  large: { label: "대", width: 640, height: 520 },
+};
+
 export interface CalendarTab {
   id: string;
   name: string;
@@ -71,6 +90,8 @@ export interface CalendarMemoSettings {
   showAnniversaries: boolean;
   /** 한 화면(뷰포트)에 표시할 주(Row) 수 */
   visibleWeeksPerViewport: number;
+  /** 편집 팝오버 크기 설정 (소/중/대 프리셋 또는 드래그 커스텀 크기) */
+  popoverSize: PopoverSizeConfig;
   /**
    * 셀 배경색 저장소: cellColors[tabId][YYYY-MM-DD] = colorId
    * -> 빈 날짜에도 색칠할 수 있도록 .md 프론트매터 대신 data.json에 분리 저장함.
@@ -117,6 +138,11 @@ export const DEFAULT_SETTINGS: CalendarMemoSettings = {
   lunarDisplay: "periodic",
   showAnniversaries: true,
   visibleWeeksPerViewport: 5,
+  popoverSize: {
+    preset: "medium",
+    width: POPOVER_SIZE_PRESETS.medium.width,
+    height: POPOVER_SIZE_PRESETS.medium.height,
+  },
   cellColors: {},
   recurringEvents: [],
   customHolidays: [],

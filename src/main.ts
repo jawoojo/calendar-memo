@@ -1,4 +1,4 @@
-import { Plugin, WorkspaceLeaf } from "obsidian";
+import { Notice, Plugin, TFolder, WorkspaceLeaf } from "obsidian";
 import {
   CalendarMemoSettings,
   DEFAULT_SETTINGS,
@@ -12,7 +12,7 @@ import {
 } from "./ui/calendarView";
 import { CalendarMemoSettingTab } from "./settings";
 import { CustomHolidaysModal, RecurringEventsModal } from "./ui/modals";
-import { getTodayKey } from "./calendar/dateUtils";
+import { getTodayKey, remapTabFolderPath } from "./calendar/dateUtils";
 
 // [ID 1.2] Calendar Memo 플러그인 진입점 및 수명 주기 관리
 // -> 리본 아이콘/단축키 원클릭 토글, 볼트 파일 실시간 감시, 한국형 캘린더 서비스 초기화를 담당함.
@@ -93,9 +93,13 @@ export default class CalendarMemoPlugin extends Plugin {
         )
       );
       this.registerEvent(
-        this.app.vault.on("rename", (file, oldPath) =>
-          this.vaultSync.handleVaultFileEvent(file, "rename", oldPath)
-        )
+        this.app.vault.on("rename", (file, oldPath) => {
+          // [ID 4.6] 탐색기에서 폴더 이동/이름 변경 시 연결된 캘린더 탭 경로 자동 업데이트
+          if (file instanceof TFolder) {
+            void this.handleFolderRename(oldPath, file.path);
+          }
+          this.vaultSync.handleVaultFileEvent(file, "rename", oldPath);
+        })
       );
     });
 
@@ -115,6 +119,9 @@ export default class CalendarMemoPlugin extends Plugin {
         loaded?.tabs && loaded.tabs.length > 0
           ? loaded.tabs
           : DEFAULT_SETTINGS.tabs.map((t) => ({ ...t })),
+      popoverSize: loaded?.popoverSize
+        ? { ...DEFAULT_SETTINGS.popoverSize, ...loaded.popoverSize }
+        : { ...DEFAULT_SETTINGS.popoverSize },
       cellColors: loaded?.cellColors ? { ...loaded.cellColors } : {},
       recurringEvents: Array.isArray(loaded?.recurringEvents)
         ? loaded.recurringEvents
@@ -131,6 +138,42 @@ export default class CalendarMemoPlugin extends Plugin {
 
   async saveSettings(): Promise<void> {
     await this.saveData(this.settings);
+  }
+
+  /**
+   * [ID 4.6] 탐색기 폴더 이동·이름 변경 시 연결된 캘린더 탭들의 folderPath를 자동 갱신함.
+   * -> 상위 폴더를 통째로 옮긴 경우 하위 폴더 이벤트에서 중복 변환되지 않도록 변경 즉시 설정에 반영함.
+   */
+  private async handleFolderRename(
+    oldPath: string,
+    newPath: string
+  ): Promise<void> {
+    const updatedTabs: Array<{ name: string; nextPath: string }> = [];
+
+    for (const tab of this.settings.tabs) {
+      const remapped = remapTabFolderPath(tab.folderPath, oldPath, newPath);
+      if (remapped !== null) {
+        tab.folderPath = remapped;
+        this.vaultSync.invalidateTabCache(tab.id);
+        updatedTabs.push({ name: tab.name, nextPath: remapped });
+      }
+    }
+
+    if (updatedTabs.length === 0) return;
+
+    await this.saveSettings();
+    this.refreshAllViews();
+
+    if (updatedTabs.length === 1) {
+      const only = updatedTabs[0];
+      new Notice(
+        `Calendar Memo: "${only.name}" 탭 경로가 "${only.nextPath}"(으)로 자동 업데이트되었습니다.`
+      );
+    } else {
+      new Notice(
+        `Calendar Memo: ${updatedTabs.length}개 탭의 폴더 경로가 자동 업데이트되었습니다.`
+      );
+    }
   }
 
   async deleteTab(tabId: string): Promise<void> {

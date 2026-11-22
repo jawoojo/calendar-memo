@@ -139,6 +139,33 @@ export function normalizeFolderPath(folderPath: string): string {
     .replace(/^\/+|\/+$/g, "");
 }
 
+// [ID 4.6] 탐색기 폴더 이동/이름 변경 시 탭 연결 경로 자동 재매핑 유틸리티
+// -> 탭이 가리키는 폴더 자체 또는 그 상위 폴더가 이동/이름 변경되었을 때 새 경로를 계산하며,
+//    볼트 루트("") 탭은 영향을 받지 않도록 제외함.
+export function remapTabFolderPath(
+  tabFolderPath: string,
+  oldFolderPath: string,
+  newFolderPath: string
+): string | null {
+  const current = normalizeFolderPath(tabFolderPath);
+  const oldNorm = normalizeFolderPath(oldFolderPath);
+  const newNorm = normalizeFolderPath(newFolderPath);
+
+  if (!current || !oldNorm || oldNorm === newNorm) return null;
+
+  if (current === oldNorm) {
+    return newNorm;
+  }
+
+  const prefix = `${oldNorm}/`;
+  if (current.startsWith(prefix)) {
+    const suffix = current.slice(prefix.length);
+    return newNorm ? `${newNorm}/${suffix}` : suffix;
+  }
+
+  return null;
+}
+
 /**
  * 순수 토큰 포맷터 (window.moment 부재 시 폴백).
  * Moment의 [리터럴], YYYY, YY, MM, M, DD, D, dddd, ddd 토큰을 지원함.

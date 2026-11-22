@@ -7,6 +7,7 @@ import {
   diffDays,
   getWeekStart,
   parseNotePathToDateKey,
+  remapTabFolderPath,
 } from "../src/calendar/dateUtils";
 import { KoreanCalendarService } from "../src/calendar/koreanCalendar";
 import {
@@ -19,6 +20,7 @@ import {
   computePasteTargets,
   formatExternalClipboardText,
   getSelectedCells,
+  mergeMemoContentForAppend,
 } from "../src/editor/clipboardAndHistory";
 import { RecurringEvent } from "../src/types";
 import { matchEmojiHighlightPrefix } from "../src/ui/highlightHelper";
@@ -285,6 +287,28 @@ describe("Emoji-prefix highlight helper", () => {
       prefixLength: "🟢".length,
     });
     expect(matchEmojiHighlightPrefix("일반 노란 하이라이트")).toBeNull();
+  });
+});
+
+describe("Append paste merge & folder rename remapping", () => {
+  it("appends incoming memo below existing content and preserves existing when incoming is blank", () => {
+    expect(mergeMemoContentForAppend("", "신규 행사")).toBe("신규 행사");
+    expect(mergeMemoContentForAppend("기존 메모\n", "추가 행사")).toBe(
+      "기존 메모\n추가 행사"
+    );
+    expect(mergeMemoContentForAppend("기존 메모", "   ")).toBe("기존 메모");
+  });
+
+  it("remaps exact and nested tab folder paths on folder move/rename", () => {
+    expect(remapTabFolderPath("수능업무", "수능업무", "2026/수능업무")).toBe(
+      "2026/수능업무"
+    );
+    expect(
+      remapTabFolderPath("업무/프로젝트A", "업무", "아카이브/업무")
+    ).toBe("아카이브/업무/프로젝트A");
+    // 다른 폴더나 볼트 루트는 변경되지 않아야 함
+    expect(remapTabFolderPath("업무2", "업무", "아카이브/업무")).toBeNull();
+    expect(remapTabFolderPath("", "업무", "아카이브/업무")).toBeNull();
   });
 });
 

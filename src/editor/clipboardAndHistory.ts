@@ -140,7 +140,7 @@ export function computePasteTargets(
     }));
   }
 
-  // 내부 2D 영역 복사 -> 좌상단 기준 상대 오프셋 유지하며 덮어쓰기
+  // 내부 2D 영역 복사 -> 좌상단 기준 상대 오프셋 유지하며 대상 셀 계산
   return clipboard.cells.map((cell) => {
     const targetRow = bounds.minRow + cell.relRow;
     const targetCol = bounds.minCol + cell.relCol;
@@ -151,6 +151,24 @@ export function computePasteTargets(
       content: cell.content,
     };
   });
+}
+
+// [ID 7.1.2] 붙여넣기 이어붙이기(Append) 병합 규칙
+// -> 캘린더에 기존 메모를 유지한 채 행사/일정을 추가할 수 있도록 덮어쓰기 대신 아래 줄에 이어붙이며,
+//    복사 영역에 포함된 빈 셀은 대상 날짜의 기존 메모를 지우지 않고 보존함.
+export function mergeMemoContentForAppend(
+  existing: string,
+  incoming: string
+): string {
+  if (incoming.trim().length === 0) {
+    return existing;
+  }
+  if (existing.trim().length === 0) {
+    return incoming;
+  }
+  const trimmedExisting = existing.replace(/\s+$/, "");
+  const trimmedIncoming = incoming.replace(/^\n+/, "");
+  return `${trimmedExisting}\n${trimmedIncoming}`;
 }
 
 // [ID 7.3] 그리드 레벨 Undo / Redo 히스토리 스택

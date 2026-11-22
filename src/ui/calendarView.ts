@@ -39,6 +39,7 @@ import {
   getRectBounds,
   getSelectedCells,
   isCoordInRange,
+  mergeMemoContentForAppend,
 } from "../editor/clipboardAndHistory";
 import { CalendarPopoverEditor } from "./popoverEditor";
 import {
@@ -1272,6 +1273,11 @@ export class CalendarMemoView extends ItemView {
       dateKey,
       meta,
       anchorRect: cellEl.getBoundingClientRect(),
+      initialSize: this.plugin.settings.popoverSize,
+      onSizeChange: (nextSize) => {
+        this.plugin.settings.popoverSize = nextSize;
+        void this.plugin.saveSettings();
+      },
       onClosed: (closedDateKey) => {
         this.activePopover = null;
         const targetCell = this.cellElements.get(closedDateKey);
@@ -1363,26 +1369,28 @@ export class CalendarMemoView extends ItemView {
         activeTab,
         target.dateKey
       );
-      if (before !== target.content) {
+      // [ID 7.1.2] 기존 메모를 덮어쓰지 않고 아래에 이어붙임 (빈 셀 붙여넣기는 기존 메모 보존)
+      const merged = mergeMemoContentForAppend(before, target.content);
+      if (before !== merged) {
         changes.push({
           type: "content",
           tabId: activeTab.id,
           dateKey: target.dateKey,
           before,
-          after: target.content,
+          after: merged,
         });
         await this.plugin.vaultSync.writeMemo(
           activeTab,
           target.dateKey,
-          target.content
+          merged
         );
       }
     }
 
     if (changes.length > 0) {
-      this.undoHistory.push({ label: "붙여넣기", changes });
+      this.undoHistory.push({ label: "붙여넣기(추가)", changes });
       this.updateUndoRedoButtons();
-      new Notice(`${changes.length}개 날짜에 붙여넣기 완료`);
+      new Notice(`${changes.length}개 날짜에 내용 추가 완료`);
     }
   }
 

@@ -606,6 +606,113 @@ button.cm-color-swatch.cm-swatch-gray, .cm-dot-gray { background-color: #64748b;
   background: var(--background-secondary);
   border-bottom: 1px solid var(--background-modifier-border);
   flex-shrink: 0;
+  cursor: move;
+  user-select: none;
+}
+
+.cm-popover.is-resizing,
+.cm-popover.is-dragging {
+  transition: none !important;
+  user-select: none;
+}
+
+/* [ID 6.6] 편집 팝오버 소/중/대 크기 프리셋 세그먼트 버튼 */
+.cm-popover-size-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  padding: 2px;
+  border-radius: 6px;
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  margin-right: 4px;
+}
+
+button.cm-popover-size-btn {
+  padding: 1px 6px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.4;
+  border-radius: 4px;
+  color: var(--text-muted);
+  background: transparent;
+  cursor: pointer;
+}
+
+button.cm-popover-size-btn:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+
+button.cm-popover-size-btn.is-active {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+}
+
+/* [ID 6.6.1] 팝오버 드래그 리사이즈 핸들 (우/좌/하/좌하/우하) */
+.cm-popover-resize {
+  position: absolute;
+  z-index: 10;
+}
+
+.cm-resize-e {
+  top: 0;
+  right: 0;
+  width: 6px;
+  height: calc(100% - 14px);
+  cursor: ew-resize;
+}
+
+.cm-resize-w {
+  top: 0;
+  left: 0;
+  width: 6px;
+  height: calc(100% - 14px);
+  cursor: ew-resize;
+}
+
+.cm-resize-s {
+  left: 14px;
+  bottom: 0;
+  width: calc(100% - 28px);
+  height: 6px;
+  cursor: ns-resize;
+}
+
+.cm-resize-sw {
+  left: 0;
+  bottom: 0;
+  width: 14px;
+  height: 14px;
+  cursor: nesw-resize;
+}
+
+.cm-resize-se {
+  right: 0;
+  bottom: 0;
+  width: 16px;
+  height: 16px;
+  cursor: nwse-resize;
+}
+
+/* 우측 하단 코너에 은은한 그립 사선 표시 */
+.cm-resize-se::after {
+  content: "";
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 8px;
+  height: 8px;
+  border-right: 2px solid var(--text-faint);
+  border-bottom: 2px solid var(--text-faint);
+  border-radius: 0 0 2px 0;
+  opacity: 0.65;
+  transition: opacity 0.12s ease, border-color 0.12s ease;
+}
+
+.cm-resize-se:hover::after {
+  opacity: 1;
+  border-color: var(--interactive-accent);
 }
 
 .cm-popover-title-wrap {
@@ -654,6 +761,11 @@ button.cm-color-swatch.cm-swatch-gray, .cm-dot-gray { background-color: #64748b;
   font-size: 11px;
   color: var(--text-faint);
   margin-right: 4px;
+  white-space: nowrap;
+}
+
+.cm-popover.is-compact .cm-popover-hint {
+  display: none;
 }
 
 .cm-popover-editor-host {

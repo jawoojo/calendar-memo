@@ -8,7 +8,14 @@ import {
 } from "obsidian";
 import { Prec } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
-import { CalendarTab, DateKey, DayCalendarMeta } from "../types";
+import {
+  CalendarTab,
+  DateKey,
+  DayCalendarMeta,
+  POPOVER_SIZE_PRESETS,
+  PopoverSizeConfig,
+  PopoverSizePreset,
+} from "../types";
 import { VaultSyncManager } from "../storage/vaultSync";
 import { getDayOfWeek, parseDateKey } from "../calendar/dateUtils";
 
@@ -140,19 +147,32 @@ export interface PopoverOpenOptions {
   dateKey: DateKey;
   meta: DayCalendarMeta;
   anchorRect: DOMRect;
+  initialSize: PopoverSizeConfig;
+  onSizeChange: (size: PopoverSizeConfig) => void;
   onClosed: (dateKey: DateKey, finalContent: string) => void;
 }
+
+const POPOVER_MIN_WIDTH = 280;
+const POPOVER_MIN_HEIGHT = 180;
+const POPOVER_VIEWPORT_MARGIN = 12;
 
 export class CalendarPopoverEditor {
   private app: App;
   private vaultSync: VaultSyncManager;
   private tab: CalendarTab;
   private dateKey: DateKey;
+  private currentSize: PopoverSizeConfig;
+  private onSizeChange: (size: PopoverSizeConfig) => void;
   private onClosed: (dateKey: DateKey, finalContent: string) => void;
 
   private popoverEl: HTMLElement | null = null;
+  private sizeButtons = new Map<
+    Exclude<PopoverSizePreset, "custom">,
+    HTMLButtonElement
+  >();
   private isOpen = false;
   private isClosing = false;
+  private isInteracting = false;
   private dirty = false;
   private saveTimer: number | null = null;
   private initialContent = "";
@@ -176,6 +196,8 @@ export class CalendarPopoverEditor {
     this.vaultSync = options.vaultSync;
     this.tab = options.tab;
     this.dateKey = options.dateKey;
+    this.currentSize = { ...options.initialSize };
+    this.onSizeChange = options.onSizeChange;
     this.onClosed = options.onClosed;
     void this.open(options.meta, options.anchorRect);
   }
@@ -204,6 +226,10 @@ export class CalendarPopoverEditor {
     if (!mounted) {
       this.mountTextareaFallback(editorHost);
     }
+
+    // [ID 6.6.1] 드래그 리사이즈 핸들 부착 (우측·좌측·하단·좌하단·우하단)
+    // -> 토요일처럼 화면 우측 끝에 붙은 셀에서도 왼쪽으로 넓힐 수 있도록 양쪽 방향 핸들을 모두 지원함.
+    this.attachResizeHandles(popoverEl);
 
     // [ID 6.3] 팝오버 단축키(Ctrl/Cmd+Enter 저장·닫기, ESC 닫기) 및 외부 클릭 닫기 핸들러
     // -> 옵시디언 전역 키맵(Cmd/Ctrl+Enter = 체크박스 토글)과 한글 IME 조합 상태(e.key === 'Process')보다
@@ -252,6 +278,7 @@ export class CalendarPopoverEditor {
     window.setTimeout(() => {
       if (!this.isOpen) return;
       this.outsidePointerHandler = (e: PointerEvent) => {
+        if (this.isInteracting) return;
         const target = e.target as HTMLElement | null;
         if (!target || !this.popoverEl) return;
         if (this.popoverEl.contains(target)) return;
@@ -269,20 +296,26 @@ export class CalendarPopoverEditor {
   }
 
   /**
-   * [ID 6.4] 셀 기준 팝오버 위치 산출 (메모잇 스타일: 셀보다 살짝 크게 띄우고 화면 밖 클램핑)
+   * [ID 6.4] 셀 기준 팝오버 위치 및 저장된 크기 산출 (소/중/대/커스텀 지원 + 화면 밖 클램핑)
    */
   private positionPopover(popoverEl: HTMLElement, anchorRect: DOMRect): void {
-    const margin = 12;
-    const width = Math.min(
-      Math.max(anchorRect.width + 88, 340),
-      Math.min(520, window.innerWidth - margin * 2)
-    );
-    const height = Math.min(
-      Math.max(anchorRect.height + 120, 260),
-      Math.min(480, window.innerHeight - margin * 2)
-    );
+    const margin = POPOVER_VIEWPORT_MARGIN;
+    const maxW = Math.max(POPOVER_MIN_WIDTH, window.innerWidth - margin * 2);
+    const maxH = Math.max(POPOVER_MIN_HEIGHT, window.innerHeight - margin * 2);
 
-    // 셀의 중심을 기준으로 살짝 확대된 위치에 배치
+    const baseWidth =
+      this.currentSize.preset !== "custom"
+        ? POPOVER_SIZE_PRESETS[this.currentSize.preset].width
+        : this.currentSize.width;
+    const baseHeight =
+      this.currentSize.preset !== "custom"
+        ? POPOVER_SIZE_PRESETS[this.currentSize.preset].height
+        : this.currentSize.height;
+
+    const width = Math.min(Math.max(baseWidth, POPOVER_MIN_WIDTH), maxW);
+    const height = Math.min(Math.max(baseHeight, POPOVER_MIN_HEIGHT), maxH);
+
+    // 셀의 중심을 기준으로 배치하고 화면 밖으로 넘치지 않도록 클램핑
     let left = anchorRect.left - (width - anchorRect.width) / 2;
     let top = anchorRect.top - (height - anchorRect.height) / 2;
 
@@ -293,10 +326,194 @@ export class CalendarPopoverEditor {
     popoverEl.style.top = `${Math.round(top)}px`;
     popoverEl.style.width = `${Math.round(width)}px`;
     popoverEl.style.height = `${Math.round(height)}px`;
+    popoverEl.classList.toggle("is-compact", width < 430);
+  }
+
+  /**
+   * [ID 6.6.2] 소/중/대 프리셋 클릭 시 중심점을 유지하며 크기 전환 및 설정 저장
+   */
+  private applySizePreset(preset: Exclude<PopoverSizePreset, "custom">): void {
+    if (!this.popoverEl) return;
+    const margin = POPOVER_VIEWPORT_MARGIN;
+    const target = POPOVER_SIZE_PRESETS[preset];
+    const maxW = Math.max(POPOVER_MIN_WIDTH, window.innerWidth - margin * 2);
+    const maxH = Math.max(POPOVER_MIN_HEIGHT, window.innerHeight - margin * 2);
+    const nextW = Math.min(target.width, maxW);
+    const nextH = Math.min(target.height, maxH);
+
+    const rect = this.popoverEl.getBoundingClientRect();
+    const centerX = rect.left + rect.width / 2;
+    const centerY = rect.top + rect.height / 2;
+
+    let left = centerX - nextW / 2;
+    let top = centerY - nextH / 2;
+    left = Math.max(margin, Math.min(left, window.innerWidth - nextW - margin));
+    top = Math.max(margin, Math.min(top, window.innerHeight - nextH - margin));
+
+    this.popoverEl.style.left = `${Math.round(left)}px`;
+    this.popoverEl.style.top = `${Math.round(top)}px`;
+    this.popoverEl.style.width = `${Math.round(nextW)}px`;
+    this.popoverEl.style.height = `${Math.round(nextH)}px`;
+    this.popoverEl.classList.toggle("is-compact", nextW < 430);
+
+    this.currentSize = {
+      preset,
+      width: Math.round(nextW),
+      height: Math.round(nextH),
+    };
+    this.updateSizePresetButtons();
+    this.onSizeChange({ ...this.currentSize });
+  }
+
+  private updateSizePresetButtons(): void {
+    for (const [key, btn] of this.sizeButtons.entries()) {
+      btn.toggleClass("is-active", this.currentSize.preset === key);
+    }
+  }
+
+  /**
+   * [ID 6.6.3] 팝오버 헤더 드래그 이동 & 테두리/코너 드래그 크기 조절
+   */
+  private attachHeaderDrag(headerEl: HTMLElement): void {
+    headerEl.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0 || !this.popoverEl) return;
+      const target = e.target as HTMLElement;
+      if (target.closest("button")) return;
+
+      e.preventDefault();
+      this.isInteracting = true;
+      const startX = e.clientX;
+      const startY = e.clientY;
+      const startRect = this.popoverEl.getBoundingClientRect();
+      this.popoverEl.addClass("is-dragging");
+
+      const onMove = (ev: PointerEvent) => {
+        if (!this.popoverEl) return;
+        const margin = POPOVER_VIEWPORT_MARGIN;
+        const nextLeft = Math.max(
+          margin,
+          Math.min(
+            startRect.left + (ev.clientX - startX),
+            window.innerWidth - startRect.width - margin
+          )
+        );
+        const nextTop = Math.max(
+          margin,
+          Math.min(
+            startRect.top + (ev.clientY - startY),
+            window.innerHeight - startRect.height - margin
+          )
+        );
+        this.popoverEl.style.left = `${Math.round(nextLeft)}px`;
+        this.popoverEl.style.top = `${Math.round(nextTop)}px`;
+      };
+
+      const onUp = () => {
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp);
+        this.popoverEl?.removeClass("is-dragging");
+        window.setTimeout(() => {
+          this.isInteracting = false;
+        }, 0);
+      };
+
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp);
+    });
+  }
+
+  private attachResizeHandles(popoverEl: HTMLElement): void {
+    const directions: Array<"e" | "w" | "s" | "se" | "sw"> = [
+      "e",
+      "w",
+      "s",
+      "se",
+      "sw",
+    ];
+
+    for (const dir of directions) {
+      const handle = popoverEl.createDiv({
+        cls: `cm-popover-resize cm-resize-${dir}`,
+        attr: { "aria-label": "창 크기 조절" },
+      });
+
+      handle.addEventListener("pointerdown", (e) => {
+        if (e.button !== 0 || !this.popoverEl) return;
+        e.preventDefault();
+        e.stopPropagation();
+
+        this.isInteracting = true;
+        this.popoverEl.addClass("is-resizing");
+
+        const startX = e.clientX;
+        const startY = e.clientY;
+        const startRect = this.popoverEl.getBoundingClientRect();
+        const margin = POPOVER_VIEWPORT_MARGIN;
+
+        const onMove = (ev: PointerEvent) => {
+          if (!this.popoverEl) return;
+          const dx = ev.clientX - startX;
+          const dy = ev.clientY - startY;
+
+          let left = startRect.left;
+          let width = startRect.width;
+          let height = startRect.height;
+
+          if (dir === "e" || dir === "se") {
+            const maxW = window.innerWidth - startRect.left - margin;
+            width = Math.max(POPOVER_MIN_WIDTH, Math.min(startRect.width + dx, maxW));
+          } else if (dir === "w" || dir === "sw") {
+            const maxRight = startRect.right;
+            const proposedLeft = Math.max(
+              margin,
+              Math.min(startRect.left + dx, maxRight - POPOVER_MIN_WIDTH)
+            );
+            left = proposedLeft;
+            width = maxRight - proposedLeft;
+          }
+
+          if (dir === "s" || dir === "se" || dir === "sw") {
+            const maxH = window.innerHeight - startRect.top - margin;
+            height = Math.max(
+              POPOVER_MIN_HEIGHT,
+              Math.min(startRect.height + dy, maxH)
+            );
+          }
+
+          this.popoverEl.style.left = `${Math.round(left)}px`;
+          this.popoverEl.style.width = `${Math.round(width)}px`;
+          this.popoverEl.style.height = `${Math.round(height)}px`;
+          this.popoverEl.classList.toggle("is-compact", width < 430);
+        };
+
+        const onUp = () => {
+          window.removeEventListener("pointermove", onMove);
+          window.removeEventListener("pointerup", onUp);
+          if (this.popoverEl) {
+            this.popoverEl.removeClass("is-resizing");
+            const finalRect = this.popoverEl.getBoundingClientRect();
+            this.currentSize = {
+              preset: "custom",
+              width: Math.round(finalRect.width),
+              height: Math.round(finalRect.height),
+            };
+            this.updateSizePresetButtons();
+            this.onSizeChange({ ...this.currentSize });
+          }
+          window.setTimeout(() => {
+            this.isInteracting = false;
+          }, 0);
+        };
+
+        window.addEventListener("pointermove", onMove);
+        window.addEventListener("pointerup", onUp);
+      });
+    }
   }
 
   private renderHeader(popoverEl: HTMLElement, meta: DayCalendarMeta): void {
     const header = popoverEl.createDiv({ cls: "cm-popover-header" });
+    this.attachHeaderDrag(header);
     const titleWrap = header.createDiv({ cls: "cm-popover-title-wrap" });
 
     const { year, month, day } = parseDateKey(this.dateKey);
@@ -322,6 +539,35 @@ export class CalendarPopoverEditor {
     }
 
     const actions = header.createDiv({ cls: "cm-popover-actions" });
+
+    // [ID 6.6] 소 / 중 / 대 크기 프리셋 전환 버튼 그룹
+    const sizeGroup = actions.createDiv({
+      cls: "cm-popover-size-group",
+      attr: { title: "편집창 크기 프리셋 (테두리 드래그로 자유 조절 가능)" },
+    });
+    this.sizeButtons.clear();
+    const presets: Array<Exclude<PopoverSizePreset, "custom">> = [
+      "small",
+      "medium",
+      "large",
+    ];
+    for (const presetKey of presets) {
+      const cfg = POPOVER_SIZE_PRESETS[presetKey];
+      const btn = sizeGroup.createEl("button", {
+        cls: "clickable-icon cm-popover-size-btn",
+        text: cfg.label,
+        attr: {
+          type: "button",
+          "aria-label": `편집창 크기: ${cfg.label} (${cfg.width}x${cfg.height})`,
+        },
+      });
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.applySizePreset(presetKey);
+      });
+      this.sizeButtons.set(presetKey, btn);
+    }
+    this.updateSizePresetButtons();
 
     const hintText = Platform.isMacOS ? "⌘+Enter 저장" : "Ctrl+Enter 저장";
     actions.createSpan({ cls: "cm-popover-hint", text: hintText });
