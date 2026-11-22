@@ -5,23 +5,26 @@ import {
   Menu,
   Notice,
   Platform,
+  TFile,
   WorkspaceLeaf,
   setIcon,
 } from "obsidian";
 import {
+  ALL_TABS_ID,
   CELL_COLOR_PRESETS,
   CalendarTab,
   DateKey,
   DayCalendarMeta,
 } from "../types";
 import {
+  addDays,
   coordToDateKey,
   dateKeyToCoord,
   getDayOfWeek,
   getTodayKey,
   getWeekStart,
-  getWeekdayHeaders,
   parseDateKey,
+  parseObsidianUriToFilePath,
 } from "../calendar/dateUtils";
 import {
   excludeRecurringOccurrence,
@@ -35,13 +38,18 @@ import {
   InternalClipboardData,
   SelectionRange,
   computePasteTargets,
+  extractIncompleteTasks,
   formatExternalClipboardText,
   getRectBounds,
   getSelectedCells,
   isCoordInRange,
   mergeMemoContentForAppend,
 } from "../editor/clipboardAndHistory";
-import { CalendarPopoverEditor } from "./popoverEditor";
+import {
+  BatchPopoverResult,
+  CalendarBatchPopover,
+  CalendarPopoverEditor,
+} from "./popoverEditor";
 import {
   CustomHolidaysModal,
   RecurringEventsModal,
@@ -115,6 +123,10 @@ export class CalendarMemoView extends ItemView {
   // DOM 레퍼런스
   private rootEl!: HTMLElement;
   private tabBarEl!: HTMLElement;
+  private toolbarEl!: HTMLElement;
+  private searchBarEl!: HTMLElement;
+  private searchInputEl!: HTMLInputElement;
+  private searchCountEl!: HTMLElement;
   private monthTitleEl!: HTMLElement;
   private monthPickerInput!: HTMLInputElement;
   private weekdayHeaderEl!: HTMLElement;
@@ -132,7 +144,7 @@ export class CalendarMemoView extends ItemView {
   private cellComponents = new Map<DateKey, Component>();
   private cellRenderSeq = new Map<DateKey, number>();
 
-  // 선택·드래그·클립보드·히스토리·팝오버 상태
+  // 선택·드래그·클립보드·히스토리·팝오버·검색 상태
   private selection: SelectionRange = {
     anchor: { row: 0, col: 0 },
     focus: { row: 0, col: 0 },
@@ -141,9 +153,18 @@ export class CalendarMemoView extends ItemView {
   private internalClipboard: InternalClipboardData | null = null;
   private undoHistory = new GridUndoHistory(100);
   private activePopover: CalendarPopoverEditor | null = null;
+  private activeBatchPopover: CalendarBatchPopover | null = null;
+  private lastRealTabId = "";
+
+  private searchQuery = "";
+  private searchMatches: DateKey[] = [];
+  private searchMatchSet = new Set<DateKey>();
+  private searchMatchIdx = -1;
+  private searchTimer: number | null = null;
 
   private unsubscribeVaultSync: (() => void) | null = null;
   private globalPointerUpHandler: (() => void) | null = null;
+  private windowKeydownHandler: ((e: KeyboardEvent) => void) | null = null;
   private isLoadingRows = false;
   private scrollRafId: number | null = null;
   private displayedYm = "";
@@ -152,6 +173,7 @@ export class CalendarMemoView extends ItemView {
   constructor(leaf: WorkspaceLeaf, plugin: CalendarMemoPlugin) {
     super(leaf);
     this.plugin = plugin;
+    this.lastRealTabId = this.plugin.settings.tabs[0]?.id ?? "";
   }
 
   getViewType(): string {
@@ -166,11 +188,31 @@ export class CalendarMemoView extends ItemView {
     return "calendar-days";
   }
 
+  isAllTabsMode(): boolean {
+    return (
+      this.plugin.settings.activeTabId === ALL_TABS_ID &&
+      this.plugin.settings.tabs.length > 1
+    );
+  }
+
   getActiveTab(): CalendarTab {
     const found = this.plugin.settings.tabs.find(
       (t) => t.id === this.plugin.settings.activeTabId
     );
-    return found ?? this.plugin.settings.tabs[0];
+    if (found) {
+      this.lastRealTabId = found.id;
+      return found;
+    }
+    const lastReal = this.plugin.settings.tabs.find(
+      (t) => t.id === this.lastRealTabId
+    );
+    return lastReal ?? this.plugin.settings.tabs[0];
+  }
+
+  private hasAnyPopoverOpen(): boolean {
+    return Boolean(
+      this.activePopover?.isActive() || this.activeBatchPopover?.isActive()
+    );
   }
 
   async onOpen(): Promise<void> {
@@ -179,9 +221,10 @@ export class CalendarMemoView extends ItemView {
 
     this.rootEl = this.contentEl.createDiv({ cls: "cm-root" });
 
-    // [ID 5.2] 상단 영역: 폴더 탭 바 + 내비게이션/편집 툴바
+    // [ID 5.2] 상단 영역: 폴더 탭 바 + 내비게이션/편집 툴바 + 검색 바
     this.tabBarEl = this.rootEl.createDiv({ cls: "cm-tab-bar" });
-    this.buildToolbar(this.rootEl);
+    this.toolbarEl = this.rootEl.createDiv({ cls: "cm-toolbar" });
+    this.searchBarEl = this.rootEl.createDiv({ cls: "cm-search-bar is-hidden" });
 
     // 무한 스크롤 그리드 컨테이너 (키보드 포커스 대상)
     // [ID 5.2.1] 요일 헤더를 스크롤 컨테이너 내부 sticky로 배치
@@ -202,12 +245,11 @@ export class CalendarMemoView extends ItemView {
 
     // [ID 5.5.1] 캘린더 뷰 전역 Tab / Shift+Tab 폴더 탭 전환
     // -> 브라우저 기본 Tab 포커스 이동(툴바 버튼 순회)을 막고 캘린더 폴더 탭 간 빠른 순환 전환을 제공함.
-    //    (팝오버 편집기·입력창 활성 중이거나 Ctrl/Cmd/Alt 조합 시에는 원래 동작을 유지함)
     this.rootEl.addEventListener(
       "keydown",
       (e: KeyboardEvent) => {
         if (e.key !== "Tab" || e.ctrlKey || e.metaKey || e.altKey) return;
-        if (this.activePopover?.isActive()) return;
+        if (this.hasAnyPopoverOpen()) return;
         const activeTag = (document.activeElement?.tagName ?? "").toLowerCase();
         if (activeTag === "input" || activeTag === "textarea") return;
 
@@ -218,15 +260,56 @@ export class CalendarMemoView extends ItemView {
       true
     );
 
+    // [ID 5.8.1] 전역 window 캡처 단계에서 Ctrl/Cmd+F 찾기 토글 및 ESC 찾기 닫기 처리
+    // -> 옵시디언 기본 Cmd/Ctrl+F(현재 파일 검색)와 한글 IME(e.key === 'ㄹ')보다 먼저 가로채고,
+    //    그리드에 포커스가 있을 때도 ESC 한 번으로 찾기 모드를 깔끔하게 종료함.
+    this.windowKeydownHandler = (e: KeyboardEvent) => {
+      if (this.app.workspace.getActiveViewOfType(CalendarMemoView) !== this) {
+        return;
+      }
+      if (this.hasAnyPopoverOpen()) return;
+      if (
+        document.querySelector(
+          ".modal-container, .prompt, .suggestion-container, .menu"
+        )
+      ) {
+        return;
+      }
+
+      const isFindKey =
+        (e.metaKey || e.ctrlKey) &&
+        !e.altKey &&
+        !e.shiftKey &&
+        (e.key === "f" || e.key === "F" || e.code === "KeyF");
+      if (isFindKey) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        if (this.searchBarEl.hasClass("is-hidden")) {
+          this.openSearchBar();
+        } else {
+          this.closeSearchBar();
+        }
+        return;
+      }
+
+      const isEsc = e.key === "Escape" || e.code === "Escape";
+      if (isEsc && !this.searchBarEl.hasClass("is-hidden")) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        this.closeSearchBar();
+      }
+    };
+    window.addEventListener("keydown", this.windowKeydownHandler, true);
+
     this.globalPointerUpHandler = () => {
       this.isDraggingSelection = false;
     };
     window.addEventListener("pointerup", this.globalPointerUpHandler);
 
-    // 볼트 실시간 변경 구독: 수정된 날짜 셀만 즉시 부분 갱신
+    // 볼트 실시간 변경 구독: 수정된 날짜 셀만 즉시 부분 갱신 (전체 보기 모드에서는 모든 탭 감지)
     this.unsubscribeVaultSync = this.plugin.vaultSync.onChange(
       (tabId, dateKey) => {
-        if (tabId !== this.getActiveTab().id) return;
+        if (!this.isAllTabsMode() && tabId !== this.getActiveTab().id) return;
         const cellEl = this.cellElements.get(dateKey);
         if (cellEl) {
           void this.refreshCellContent(dateKey, cellEl);
@@ -242,6 +325,14 @@ export class CalendarMemoView extends ItemView {
       await this.activePopover.close();
       this.activePopover = null;
     }
+    if (this.activeBatchPopover) {
+      this.activeBatchPopover.close();
+      this.activeBatchPopover = null;
+    }
+    if (this.searchTimer !== null) {
+      window.clearTimeout(this.searchTimer);
+      this.searchTimer = null;
+    }
     if (this.unsubscribeVaultSync) {
       this.unsubscribeVaultSync();
       this.unsubscribeVaultSync = null;
@@ -249,6 +340,10 @@ export class CalendarMemoView extends ItemView {
     if (this.globalPointerUpHandler) {
       window.removeEventListener("pointerup", this.globalPointerUpHandler);
       this.globalPointerUpHandler = null;
+    }
+    if (this.windowKeydownHandler) {
+      window.removeEventListener("keydown", this.windowKeydownHandler, true);
+      this.windowKeydownHandler = null;
     }
     if (this.scrollRafId !== null) {
       window.cancelAnimationFrame(this.scrollRafId);
@@ -296,27 +391,43 @@ export class CalendarMemoView extends ItemView {
   }
 
   // ==========================================================================
-  // 상단 UI (폴더 탭 바, 툴바, 요일 헤더)
+  // 상단 UI (폴더 탭 바, 툴바, 검색 바, 요일 헤더)
   // ==========================================================================
   private renderTabBar(): void {
     this.tabBarEl.empty();
+    const s = this.plugin.t();
+    const allMode = this.isAllTabsMode();
     const activeTab = this.getActiveTab();
 
+    // [ID 5.9] 탭이 2개 이상이면 맨 앞에 '전체 보기' 탭을 제공해 모든 폴더 일정을 한 화면에서 조망함
+    if (this.plugin.settings.tabs.length > 1) {
+      const allBtn = this.tabBarEl.createDiv({
+        cls: `cm-tab-item cm-tab-all ${allMode ? "is-active" : ""}`,
+        attr: { title: s.allTabsTooltip },
+      });
+      allBtn.createSpan({ cls: "cm-tab-name", text: s.allTabsLabel });
+      allBtn.addEventListener("click", async () => {
+        if (this.isAllTabsMode()) return;
+        await this.switchTab(ALL_TABS_ID);
+      });
+    }
+
     for (const tab of this.plugin.settings.tabs) {
+      const isActive = !allMode && tab.id === activeTab.id;
       const tabBtn = this.tabBarEl.createDiv({
-        cls: `cm-tab-item ${tab.id === activeTab.id ? "is-active" : ""}`,
+        cls: `cm-tab-item ${isActive ? "is-active" : ""}`,
         attr: {
-          title: `폴더: ${tab.folderPath || "(볼트 루트)"} | 포맷: ${tab.dateFormat}`,
+          title: `${tab.folderPath || "(root)"} · ${tab.dateFormat}`,
         },
       });
 
       tabBtn.createSpan({ cls: "cm-tab-name", text: tab.name });
 
       // 활성 탭에는 설정 아이콘 노출
-      if (tab.id === activeTab.id) {
+      if (isActive) {
         const editIcon = tabBtn.createSpan({
           cls: "cm-tab-edit-btn",
-          attr: { "aria-label": "탭 설정 편집" },
+          attr: { "aria-label": s.editTabAria },
         });
         setIcon(editIcon, "sliders-horizontal");
         editIcon.addEventListener("click", (e) => {
@@ -326,7 +437,9 @@ export class CalendarMemoView extends ItemView {
       }
 
       tabBtn.addEventListener("click", async () => {
-        if (tab.id === this.plugin.settings.activeTabId) return;
+        if (!this.isAllTabsMode() && tab.id === this.plugin.settings.activeTabId) {
+          return;
+        }
         await this.switchTab(tab.id);
       });
 
@@ -335,14 +448,14 @@ export class CalendarMemoView extends ItemView {
         const menu = new Menu();
         menu.addItem((item) =>
           item
-            .setTitle("탭 편집")
+            .setTitle(s.ctxEditTab)
             .setIcon("pencil")
             .onClick(() => this.openTabEditModal(tab))
         );
         if (this.plugin.settings.tabs.length > 1) {
           menu.addItem((item) =>
             item
-              .setTitle("탭 삭제")
+              .setTitle(s.ctxDeleteTab)
               .setIcon("trash-2")
               .onClick(() => void this.plugin.deleteTab(tab.id))
           );
@@ -353,17 +466,17 @@ export class CalendarMemoView extends ItemView {
 
     const addBtn = this.tabBarEl.createEl("button", {
       cls: "cm-tab-add-btn",
-      attr: { "aria-label": "새 폴더 탭 추가", type: "button" },
+      attr: { "aria-label": s.addFolderAria, type: "button" },
     });
     setIcon(addBtn, "plus");
-    addBtn.createSpan({ text: "폴더 추가" });
+    addBtn.createSpan({ text: s.addFolderBtn });
     addBtn.addEventListener("click", () => {
       new TabConfigModal(this.plugin, null, async (created) => {
         this.plugin.settings.tabs.push(created);
         this.plugin.settings.activeTabId = created.id;
         await this.plugin.saveSettings();
         this.refreshView();
-        new Notice(`"${created.name}" 캘린더 탭이 추가되었습니다.`);
+        new Notice(s.noticeTabAdded(created.name));
       }).open();
     });
   }
@@ -391,15 +504,24 @@ export class CalendarMemoView extends ItemView {
     if (this.activePopover) {
       await this.activePopover.close();
     }
+    if (this.activeBatchPopover) {
+      this.activeBatchPopover.close();
+    }
+    if (tabId !== ALL_TABS_ID) {
+      this.lastRealTabId = tabId;
+    }
     this.plugin.settings.activeTabId = tabId;
     await this.plugin.saveSettings();
     this.renderTabBar();
     this.reloadAllRenderedCells();
+    if (this.searchQuery) {
+      void this.runSearch(this.searchQuery, false);
+    }
     this.gridScrollEl.focus({ preventScroll: true });
   }
 
   /**
-   * [ID 5.5.1] Tab / Shift+Tab으로 등록된 캘린더 폴더 탭을 순환 전환함.
+   * [ID 5.5.1] Tab / Shift+Tab으로 등록된 캘린더 폴더 탭(및 전체 보기)을 순환 전환함.
    */
   private cycleFolderTab(delta: 1 | -1): void {
     const tabs = this.plugin.settings.tabs;
@@ -407,23 +529,25 @@ export class CalendarMemoView extends ItemView {
       this.gridScrollEl.focus({ preventScroll: true });
       return;
     }
+    const order = [ALL_TABS_ID, ...tabs.map((t) => t.id)];
     const currentIdx = Math.max(
       0,
-      tabs.findIndex((t) => t.id === this.plugin.settings.activeTabId)
+      order.indexOf(this.plugin.settings.activeTabId)
     );
-    const nextIdx = (currentIdx + delta + tabs.length) % tabs.length;
-    void this.switchTab(tabs[nextIdx].id);
+    const nextIdx = (currentIdx + delta + order.length) % order.length;
+    void this.switchTab(order[nextIdx]);
   }
 
-  private buildToolbar(parentEl: HTMLElement): void {
-    const toolbar = parentEl.createDiv({ cls: "cm-toolbar" });
+  private renderToolbar(): void {
+    const s = this.plugin.t();
+    this.toolbarEl.empty();
 
     // 좌측: 연/월 탐색 및 오늘 이동
-    const navGroup = toolbar.createDiv({ cls: "cm-toolbar-group" });
+    const navGroup = this.toolbarEl.createDiv({ cls: "cm-toolbar-group" });
 
     const prevMonthBtn = navGroup.createEl("button", {
       cls: "cm-icon-btn",
-      attr: { "aria-label": "이전 달", type: "button" },
+      attr: { "aria-label": s.prevMonthAria, type: "button" },
     });
     setIcon(prevMonthBtn, "chevron-left");
     prevMonthBtn.addEventListener("click", () => this.shiftVisibleMonth(-1));
@@ -432,7 +556,7 @@ export class CalendarMemoView extends ItemView {
     this.monthTitleEl = monthTitleWrap.createSpan({ cls: "cm-month-title" });
     this.monthPickerInput = monthTitleWrap.createEl("input", {
       cls: "cm-month-picker-hidden",
-      attr: { type: "month", "aria-label": "연월 이동" },
+      attr: { type: "month", "aria-label": "Month picker" },
     });
     this.monthTitleEl.addEventListener("click", () => {
       if (typeof this.monthPickerInput.showPicker === "function") {
@@ -450,33 +574,48 @@ export class CalendarMemoView extends ItemView {
 
     const nextMonthBtn = navGroup.createEl("button", {
       cls: "cm-icon-btn",
-      attr: { "aria-label": "다음 달", type: "button" },
+      attr: { "aria-label": s.nextMonthAria, type: "button" },
     });
     setIcon(nextMonthBtn, "chevron-right");
     nextMonthBtn.addEventListener("click", () => this.shiftVisibleMonth(1));
 
     const todayBtn = navGroup.createEl("button", {
       cls: "cm-toolbar-btn",
-      text: "오늘",
-      attr: { title: "오늘 날짜로 이동 (T)", type: "button" },
+      text: s.todayBtn,
+      attr: { title: s.todayTooltip, type: "button" },
     });
     todayBtn.addEventListener("click", () => this.jumpToDate(getTodayKey(), true));
 
-    // 우측: 셀 배경색 팔레트 + Undo/Redo + 반복 일정 + 커스텀 휴일
-    const toolGroup = toolbar.createDiv({ cls: "cm-toolbar-group cm-toolbar-right" });
+    // 우측: 검색 + 셀 배경색 팔레트 + Undo/Redo + 반복 일정 + 휴일
+    const toolGroup = this.toolbarEl.createDiv({
+      cls: "cm-toolbar-group cm-toolbar-right",
+    });
+
+    const searchBtn = toolGroup.createEl("button", {
+      cls: "cm-icon-btn",
+      attr: { "aria-label": s.searchTooltip, title: s.searchTooltip, type: "button" },
+    });
+    setIcon(searchBtn, "search");
+    searchBtn.addEventListener("click", () => {
+      if (this.searchBarEl.hasClass("is-hidden")) {
+        this.openSearchBar();
+      } else {
+        this.closeSearchBar();
+      }
+    });
 
     const paletteWrap = toolGroup.createDiv({
       cls: "cm-color-palette",
-      attr: { title: "선택된 셀 배경색 변경" },
+      attr: { title: s.colorPaletteTooltip },
     });
     for (const preset of CELL_COLOR_PRESETS) {
+      const colorLabel = s.colorLabels[preset.id] ?? preset.label;
       const swatchBtn = paletteWrap.createEl("button", {
         // [ID 7.2.1] 옵시디언 기본 button:not(.clickable-icon) 배경 덮어쓰기 방지
-        // -> clickable-icon 클래스 + 명시적 배경색을 함께 적용해 클릭 전에도 색상이 선명히 보이게 함.
         cls: `clickable-icon cm-color-swatch ${
           preset.id === "" ? "is-clear" : `cm-swatch-${preset.id}`
         }`,
-        attr: { "aria-label": preset.label, title: preset.label, type: "button" },
+        attr: { "aria-label": colorLabel, title: colorLabel, type: "button" },
       });
       if (preset.id === "") {
         setIcon(swatchBtn, "ban");
@@ -494,7 +633,7 @@ export class CalendarMemoView extends ItemView {
     this.undoBtn = toolGroup.createEl("button", {
       cls: "cm-icon-btn",
       attr: {
-        "aria-label": Platform.isMacOS ? "실행 취소 (⌘Z)" : "실행 취소 (Ctrl+Z)",
+        "aria-label": `${s.undoLabel} (${Platform.isMacOS ? "⌘Z" : "Ctrl+Z"})`,
         type: "button",
       },
     });
@@ -504,7 +643,7 @@ export class CalendarMemoView extends ItemView {
     this.redoBtn = toolGroup.createEl("button", {
       cls: "cm-icon-btn",
       attr: {
-        "aria-label": Platform.isMacOS ? "다시 실행 (⌘Y)" : "다시 실행 (Ctrl+Y)",
+        "aria-label": `${s.redoLabel} (${Platform.isMacOS ? "⌘Y" : "Ctrl+Y"})`,
         type: "button",
       },
     });
@@ -516,10 +655,10 @@ export class CalendarMemoView extends ItemView {
 
     const recurringBtn = toolGroup.createEl("button", {
       cls: "cm-toolbar-btn",
-      attr: { title: "반복 일정 등록 및 관리", type: "button" },
+      attr: { title: s.recurringTooltip, type: "button" },
     });
     setIcon(recurringBtn.createSpan({ cls: "cm-btn-icon" }), "repeat");
-    recurringBtn.createSpan({ text: "반복 일정" });
+    recurringBtn.createSpan({ text: s.recurringBtn });
     recurringBtn.addEventListener("click", () => {
       const focusDate = coordToDateKey(
         this.selection.focus.row,
@@ -536,10 +675,10 @@ export class CalendarMemoView extends ItemView {
 
     const holidayBtn = toolGroup.createEl("button", {
       cls: "cm-toolbar-btn",
-      attr: { title: "커스텀 휴일·기념일 관리", type: "button" },
+      attr: { title: s.holidayTooltip, type: "button" },
     });
     setIcon(holidayBtn.createSpan({ cls: "cm-btn-icon" }), "calendar-heart");
-    holidayBtn.createSpan({ text: "휴일" });
+    holidayBtn.createSpan({ text: s.holidayBtn });
     holidayBtn.addEventListener("click", () => {
       new CustomHolidaysModal(this.plugin, () =>
         this.reloadAllRenderedCells()
@@ -547,23 +686,217 @@ export class CalendarMemoView extends ItemView {
     });
   }
 
+  /**
+   * [ID 5.8] 캘린더 내부 즉시 검색 바 구성 (Cmd/Ctrl + F)
+   */
+  private renderSearchBar(): void {
+    const s = this.plugin.t();
+    this.searchBarEl.empty();
+
+    this.searchInputEl = this.searchBarEl.createEl("input", {
+      cls: "cm-search-input",
+      attr: {
+        type: "text",
+        placeholder: s.searchPlaceholder,
+        value: this.searchQuery,
+      },
+    });
+    this.searchInputEl.value = this.searchQuery;
+
+    this.searchCountEl = this.searchBarEl.createSpan({
+      cls: "cm-search-count",
+    });
+
+    const prevBtn = this.searchBarEl.createEl("button", {
+      cls: "cm-icon-btn",
+      attr: { type: "button", "aria-label": "Previous match" },
+    });
+    setIcon(prevBtn, "chevron-up");
+    prevBtn.addEventListener("click", () => this.jumpToSearchMatch(-1));
+
+    const nextBtn = this.searchBarEl.createEl("button", {
+      cls: "cm-icon-btn",
+      attr: { type: "button", "aria-label": "Next match" },
+    });
+    setIcon(nextBtn, "chevron-down");
+    nextBtn.addEventListener("click", () => this.jumpToSearchMatch(1));
+
+    const closeBtn = this.searchBarEl.createEl("button", {
+      cls: "cm-icon-btn",
+      attr: { type: "button", "aria-label": s.closeAria },
+    });
+    setIcon(closeBtn, "x");
+    closeBtn.addEventListener("click", () => this.closeSearchBar());
+
+    this.searchInputEl.addEventListener("input", () => {
+      if (this.searchTimer !== null) window.clearTimeout(this.searchTimer);
+      const q = this.searchInputEl.value;
+      this.searchTimer = window.setTimeout(() => {
+        this.searchTimer = null;
+        void this.runSearch(q, true);
+      }, 150);
+    });
+
+    this.searchInputEl.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.code === "Enter") {
+        e.preventDefault();
+        e.stopPropagation();
+        const typed = this.searchInputEl.value.trim();
+        if (this.searchTimer !== null) {
+          window.clearTimeout(this.searchTimer);
+          this.searchTimer = null;
+        }
+        if (typed !== this.searchQuery) {
+          void this.runSearch(typed, true);
+        } else {
+          this.jumpToSearchMatch(e.shiftKey ? -1 : 1);
+        }
+      } else if (e.key === "Escape" || e.code === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        this.closeSearchBar();
+      }
+    });
+  }
+
+  private openSearchBar(): void {
+    this.searchBarEl.removeClass("is-hidden");
+    this.searchInputEl.focus();
+    this.searchInputEl.select();
+  }
+
+  private closeSearchBar(): void {
+    if (this.searchTimer !== null) {
+      window.clearTimeout(this.searchTimer);
+      this.searchTimer = null;
+    }
+    this.searchBarEl.addClass("is-hidden");
+    this.searchQuery = "";
+    this.searchMatches = [];
+    this.searchMatchSet.clear();
+    this.searchMatchIdx = -1;
+    if (this.searchInputEl) this.searchInputEl.value = "";
+    if (this.searchCountEl) this.searchCountEl.setText("");
+    this.applySearchHighlightClasses();
+    this.gridScrollEl.focus({ preventScroll: true });
+  }
+
+  private async runSearch(query: string, autoJump: boolean): Promise<void> {
+    this.searchQuery = query.trim();
+    if (!this.searchQuery) {
+      this.searchMatches = [];
+      this.searchMatchSet.clear();
+      this.searchMatchIdx = -1;
+      this.searchCountEl.setText("");
+      this.applySearchHighlightClasses();
+      return;
+    }
+
+    const tabsToSearch = this.isAllTabsMode()
+      ? this.plugin.settings.tabs
+      : [this.getActiveTab()];
+    const matches = await this.plugin.vaultSync.searchNotesByQuery(
+      tabsToSearch,
+      this.searchQuery
+    );
+    this.searchMatches = matches;
+    this.searchMatchSet = new Set(matches);
+
+    if (matches.length === 0) {
+      this.searchMatchIdx = -1;
+      this.searchCountEl.setText(this.plugin.t().searchNoMatches);
+      this.applySearchHighlightClasses();
+      return;
+    }
+
+    // 오늘 날짜와 가장 가까운 결과를 기본 포커스 인덱스로 선택
+    const today = getTodayKey();
+    let bestIdx = matches.findIndex((d) => d >= today);
+    if (bestIdx < 0) bestIdx = matches.length - 1;
+    this.searchMatchIdx = bestIdx;
+    this.updateSearchCountLabel();
+    this.applySearchHighlightClasses();
+
+    if (autoJump) {
+      this.jumpToDate(matches[this.searchMatchIdx], true, "center", true);
+      this.keepSearchInputFocus();
+    }
+  }
+
+  private jumpToSearchMatch(delta: 1 | -1): void {
+    if (this.searchMatches.length === 0) return;
+    this.searchMatchIdx =
+      (this.searchMatchIdx + delta + this.searchMatches.length) %
+      this.searchMatches.length;
+    this.updateSearchCountLabel();
+    const targetDate = this.searchMatches[this.searchMatchIdx];
+    // [ID 5.8.2] keepFocus=true로 원거리 연도 점프(rebuildAll) 시에도 검색창 포커스 이탈을 방지함
+    // -> 마지막 결과에서 다시 처음으로 순환할 때 포커스가 그리드로 넘어가 노트가 열리는 버그를 차단함.
+    this.jumpToDate(targetDate, true, "center", true);
+    this.applySearchHighlightClasses();
+    this.keepSearchInputFocus();
+  }
+
+  private keepSearchInputFocus(): void {
+    if (!this.searchInputEl || this.searchBarEl.hasClass("is-hidden")) return;
+    this.searchInputEl.focus({ preventScroll: true });
+    window.requestAnimationFrame(() => {
+      if (!this.searchBarEl.hasClass("is-hidden") && !this.hasAnyPopoverOpen()) {
+        this.searchInputEl?.focus({ preventScroll: true });
+      }
+    });
+  }
+
+  private updateSearchCountLabel(): void {
+    if (this.searchMatches.length === 0) {
+      this.searchCountEl.setText(
+        this.searchQuery ? this.plugin.t().searchNoMatches : ""
+      );
+      return;
+    }
+    this.searchCountEl.setText(
+      `${this.searchMatchIdx + 1} / ${this.searchMatches.length}`
+    );
+  }
+
+  private applySearchHighlightClasses(): void {
+    const active = this.searchQuery.length > 0;
+    this.gridBodyEl.classList.toggle("is-search-active", active);
+    const currentDate =
+      this.searchMatchIdx >= 0 ? this.searchMatches[this.searchMatchIdx] : null;
+
+    for (const [dateKey, cellEl] of this.cellElements.entries()) {
+      const isMatch = active && this.searchMatchSet.has(dateKey);
+      cellEl.classList.toggle("is-search-match", isMatch);
+      cellEl.classList.toggle(
+        "is-search-current",
+        active && dateKey === currentDate
+      );
+    }
+  }
+
   private renderWeekdayHeader(): void {
     this.weekdayHeaderEl.empty();
-    const headers = getWeekdayHeaders(this.plugin.settings.weekStartsOn);
-    for (const label of headers) {
+    const s = this.plugin.t();
+    const headers =
+      this.plugin.settings.weekStartsOn === 0
+        ? s.weekdaysSunFirst
+        : s.weekdaysMonFirst;
+    headers.forEach((label, idx) => {
+      const dow = (this.plugin.settings.weekStartsOn + idx) % 7;
       const colEl = this.weekdayHeaderEl.createDiv({
         cls: "cm-weekday-cell",
         text: label,
       });
-      if (label === "일") colEl.addClass("is-sunday");
-      if (label === "토") colEl.addClass("is-saturday");
-    }
+      if (dow === 0) colEl.addClass("is-sunday");
+      if (dow === 6) colEl.addClass("is-saturday");
+    });
   }
 
   // ==========================================================================
   // [ID 5.3] 무한(연속) 스크롤 그리드 생성 및 확장
   // ==========================================================================
-  private rebuildAll(centerDateKey: DateKey): void {
+  private rebuildAll(centerDateKey: DateKey, keepFocus = false): void {
     this.clearAllCellComponents();
     this.rowElements.clear();
     this.cellElements.clear();
@@ -573,6 +906,14 @@ export class CalendarMemoView extends ItemView {
     this.rootEl.style.setProperty("--cm-visible-weeks", String(weeksPerView));
 
     this.renderTabBar();
+    this.renderToolbar();
+    // 검색 모드가 열려 있고 이미 검색 input이 존재하면 DOM을 재생성하지 않아 포커스·입력 상태를 보존함
+    if (!this.searchInputEl || !this.searchInputEl.isConnected) {
+      this.renderSearchBar();
+    } else {
+      this.searchInputEl.placeholder = this.plugin.t().searchPlaceholder;
+      this.updateSearchCountLabel();
+    }
     this.renderWeekdayHeader();
 
     this.originWeekStart = getWeekStart(
@@ -591,12 +932,18 @@ export class CalendarMemoView extends ItemView {
     const targetCoord = dateKeyToCoord(centerDateKey, this.originWeekStart);
     this.selection = { anchor: { ...targetCoord }, focus: { ...targetCoord } };
     this.updateSelectionStyles();
+    this.applySearchHighlightClasses();
 
     window.requestAnimationFrame(() => {
       this.scrollRowIntoView(targetCoord.row, "center");
       this.updateVisibleMonthIndicator();
       // 뷰를 열자마자 클릭 없이도 방향키·Tab·Enter 탐색이 즉시 동작하도록 그리드에 포커스 부여
-      if (!this.activePopover?.isActive()) {
+      // (검색 점프 중에는 검색창 포커스를 빼앗지 않음)
+      if (
+        !keepFocus &&
+        !this.hasAnyPopoverOpen() &&
+        this.searchBarEl.hasClass("is-hidden")
+      ) {
         this.gridScrollEl.focus({ preventScroll: true });
       }
     });
@@ -696,11 +1043,38 @@ export class CalendarMemoView extends ItemView {
       this.showCellContextMenu(e, dateKey, cellEl);
     });
 
+    // [ID 5.7] 노트 드래그 앤 드롭 -> 날짜 셀 하단에 [[파일이름]] 링크 자동 추가
+    cellEl.addEventListener("dragover", (e) => {
+      if (!this.hasDroppableNote(e)) return;
+      e.preventDefault();
+      if (e.dataTransfer) {
+        e.dataTransfer.dropEffect = "link";
+      }
+      cellEl.classList.add("is-drag-over");
+    });
+
+    cellEl.addEventListener("dragleave", (e) => {
+      const related = e.relatedTarget as Node | null;
+      if (related && cellEl.contains(related)) return;
+      cellEl.classList.remove("is-drag-over");
+    });
+
+    cellEl.addEventListener("drop", (e) => {
+      cellEl.classList.remove("is-drag-over");
+      const files = this.resolveDroppedFiles(e);
+      if (files.length === 0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      void this.appendDroppedNoteLinks(dateKey, files);
+    });
+
     this.populateCellStructure(dateKey, cellEl);
     return cellEl;
   }
 
   private populateCellStructure(dateKey: DateKey, cellEl: HTMLElement): void {
+    const s = this.plugin.t();
+    const allMode = this.isAllTabsMode();
     const activeTab = this.getActiveTab();
     const meta = this.plugin.koreanCalendar.getDayMeta(
       dateKey,
@@ -708,8 +1082,13 @@ export class CalendarMemoView extends ItemView {
       this.plugin.settings.showAnniversaries
     );
 
-    // 셀 배경색 클래스 적용
-    this.applyCellColorClass(cellEl, activeTab.id, dateKey);
+    // 셀 배경색 클래스 적용 (전체 보기 모드에서는 배경색이 지정된 첫 탭의 색 표시)
+    const colorTabId = allMode
+      ? this.plugin.settings.tabs.find(
+          (t) => this.plugin.settings.cellColors[t.id]?.[dateKey]
+        )?.id ?? activeTab.id
+      : activeTab.id;
+    this.applyCellColorClass(cellEl, colorTabId, dateKey);
 
     cellEl.classList.toggle("is-holiday", meta.isHoliday);
 
@@ -721,7 +1100,7 @@ export class CalendarMemoView extends ItemView {
 
     const dateBadge = headerEl.createSpan({
       cls: `cm-date-num ${day === 1 ? "is-month-first" : ""}`,
-      text: day === 1 ? `${month}월 1일` : String(day),
+      text: day === 1 ? s.formatMonthFirst(month) : String(day),
     });
     void dateBadge;
 
@@ -744,15 +1123,16 @@ export class CalendarMemoView extends ItemView {
       metaEl.createSpan({
         cls: "cm-lunar-label",
         text: meta.lunarLabel,
-        attr: { title: `음력 ${meta.lunarLabel}` },
+        attr: { title: meta.lunarLabel },
       });
     }
 
     // 2) 반복 일정 오버레이 영역
+    const recurringScopeTabId = allMode ? ALL_TABS_ID : activeTab.id;
     const recurringList = getRecurringEventsForDate(
       this.plugin.settings.recurringEvents,
       dateKey,
-      activeTab.id,
+      recurringScopeTabId,
       (dk) => this.plugin.koreanCalendar.isBusinessDay(dk)
     );
 
@@ -763,7 +1143,7 @@ export class CalendarMemoView extends ItemView {
           cls: `cm-recurring-item cm-rec-${item.event.color || "blue"} ${
             item.completed ? "is-completed" : ""
           }`,
-          attr: { title: `${item.event.title} (클릭: 완료 토글 / 우클릭: 메뉴)` },
+          attr: { title: item.event.title },
         });
         badge.createSpan({
           cls: "cm-recurring-check",
@@ -787,7 +1167,7 @@ export class CalendarMemoView extends ItemView {
           const menu = new Menu();
           menu.addItem((mi) =>
             mi
-              .setTitle(item.completed ? "완료 해제" : "완료 표시")
+              .setTitle(item.completed ? s.ctxMarkUndone : s.ctxMarkDone)
               .setIcon("check")
               .onClick(async () => {
                 toggleRecurringCompletion(item.event, dateKey);
@@ -797,7 +1177,7 @@ export class CalendarMemoView extends ItemView {
           );
           menu.addItem((mi) =>
             mi
-              .setTitle("이 날짜에서만 숨기기")
+              .setTitle(s.ctxHideThisDate)
               .setIcon("eye-off")
               .onClick(async () => {
                 excludeRecurringOccurrence(item.event, dateKey);
@@ -807,7 +1187,7 @@ export class CalendarMemoView extends ItemView {
           );
           menu.addItem((mi) =>
             mi
-              .setTitle("반복 일정 편집")
+              .setTitle(s.ctxEditRecurring)
               .setIcon("pencil")
               .onClick(() => {
                 new RecurringEventsModal(
@@ -846,24 +1226,32 @@ export class CalendarMemoView extends ItemView {
   }
 
   /**
-   * [ID 5.4] 셀 마크다운 미리보기 렌더링 + 체크박스 직접 토글
-   * -> MarkdownRenderer로 위키링크·볼드·체크박스를 네이티브와 동일하게 렌더링하며,
-   *    셀별 Component 수명 주기를 관리해 메모리 누수를 방지함.
+   * [ID 5.4] 셀 마크다운 미리보기 렌더링 + 체크박스 직접 토글 + 전체 보기 탭 합쳐보기
    */
   private async refreshCellContent(
     dateKey: DateKey,
     cellEl: HTMLElement
   ): Promise<void> {
-    const activeTab = this.getActiveTab();
     const seq = (this.cellRenderSeq.get(dateKey) ?? 0) + 1;
     this.cellRenderSeq.set(dateKey, seq);
 
-    const content = await this.plugin.vaultSync.readMemo(activeTab, dateKey);
-    // 비동기 대기 중 더 최신 렌더가 시작되었거나 셀이 제거된 경우 중단
-    if (this.cellRenderSeq.get(dateKey) !== seq || !cellEl.isConnected) return;
-
     const previewEl = cellEl.querySelector(".cm-cell-preview") as HTMLElement | null;
     if (!previewEl) return;
+
+    const allMode = this.isAllTabsMode();
+    const tabsToRender = allMode
+      ? this.plugin.settings.tabs
+      : [this.getActiveTab()];
+
+    const entries = await Promise.all(
+      tabsToRender.map(async (tab, idx) => ({
+        tab,
+        idx,
+        content: await this.plugin.vaultSync.readMemo(tab, dateKey),
+      }))
+    );
+
+    if (this.cellRenderSeq.get(dateKey) !== seq || !cellEl.isConnected) return;
 
     const prevComp = this.cellComponents.get(dateKey);
     if (prevComp) {
@@ -873,61 +1261,91 @@ export class CalendarMemoView extends ItemView {
 
     previewEl.empty();
 
-    if (content.trim().length === 0) {
+    const nonEmpty = entries.filter((e) => e.content.trim().length > 0);
+    if (nonEmpty.length === 0) {
       cellEl.classList.remove("has-memo");
       return;
     }
 
     cellEl.classList.add("has-memo");
-    const { body } = stripFrontmatter(content);
     const comp = new Component();
     comp.load();
     this.cellComponents.set(dateKey, comp);
 
-    const notePath = this.plugin.vaultSync.getNotePath(activeTab, dateKey);
-    await MarkdownRenderer.render(this.app, body, previewEl, notePath, comp);
+    for (const item of nonEmpty) {
+      const targetContainer = allMode
+        ? previewEl.createDiv({
+            cls: `cm-all-tab-block cm-tab-color-${item.idx % 6}`,
+          })
+        : previewEl;
 
-    if (this.cellRenderSeq.get(dateKey) !== seq || !previewEl.isConnected) {
-      comp.unload();
-      return;
+      if (allMode) {
+        const badge = targetContainer.createDiv({
+          cls: "cm-all-tab-badge",
+          text: item.tab.name,
+        });
+        badge.addEventListener("click", (e) => {
+          e.stopPropagation();
+          void this.switchTab(item.tab.id);
+        });
+      }
+
+      const contentHost = allMode
+        ? targetContainer.createDiv({ cls: "cm-all-tab-content" })
+        : targetContainer;
+
+      const { body } = stripFrontmatter(item.content);
+      const notePath = this.plugin.vaultSync.getNotePath(item.tab, dateKey);
+      await MarkdownRenderer.render(
+        this.app,
+        body,
+        contentHost,
+        notePath,
+        comp
+      );
+
+      if (this.cellRenderSeq.get(dateKey) !== seq || !previewEl.isConnected) {
+        comp.unload();
+        return;
+      }
+
+      // [ID 5.4.1] 이모지 접두어 하이라이트 경량 색상 적용
+      applyEmojiHighlightsToPreview(contentHost);
+
+      // 체크박스 즉시 클릭 토글 (전체 보기에서도 해당 탭의 .md 파일에 정확히 기록)
+      const checkboxes = contentHost.querySelectorAll<HTMLInputElement>(
+        "input.task-list-item-checkbox"
+      );
+      checkboxes.forEach((cb, index) => {
+        cb.addEventListener("click", async (e) => {
+          e.stopPropagation();
+          const latest = await this.plugin.vaultSync.readMemo(item.tab, dateKey);
+          const toggled = toggleNthTaskCheckbox(latest, index);
+          if (toggled !== null) {
+            await this.plugin.vaultSync.writeMemo(item.tab, dateKey, toggled);
+          }
+        });
+      });
+
+      const internalLinks = contentHost.querySelectorAll<HTMLAnchorElement>(
+        "a.internal-link"
+      );
+      internalLinks.forEach((link) => {
+        link.addEventListener("click", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const href =
+            link.getAttribute("data-href") || link.getAttribute("href");
+          if (href) {
+            void this.app.workspace.openLinkText(
+              href,
+              notePath,
+              e.metaKey || e.ctrlKey
+            );
+          }
+        });
+      });
     }
-
-    // [ID 5.4.1] 이모지 접두어 하이라이트(==🔵내용== 등) 경량 색상 적용
-    applyEmojiHighlightsToPreview(previewEl);
-
-    // 셀 미리보기에서 체크박스 즉시 클릭 토글 바인딩
-    const checkboxes = previewEl.querySelectorAll<HTMLInputElement>(
-      "input.task-list-item-checkbox"
-    );
-    checkboxes.forEach((cb, index) => {
-      cb.addEventListener("click", async (e) => {
-        e.stopPropagation();
-        const latest = await this.plugin.vaultSync.readMemo(activeTab, dateKey);
-        const toggled = toggleNthTaskCheckbox(latest, index);
-        if (toggled !== null) {
-          await this.plugin.vaultSync.writeMemo(activeTab, dateKey, toggled);
-        }
-      });
-    });
-
-    // 내부 위키링크 클릭 시 노트 열기
-    const internalLinks = previewEl.querySelectorAll<HTMLAnchorElement>(
-      "a.internal-link"
-    );
-    internalLinks.forEach((link) => {
-      link.addEventListener("click", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        const href = link.getAttribute("data-href") || link.getAttribute("href");
-        if (href) {
-          void this.app.workspace.openLinkText(
-            href,
-            notePath,
-            e.metaKey || e.ctrlKey
-          );
-        }
-      });
-    });
   }
 
   private reloadAllRenderedCells(): void {
@@ -987,6 +1405,7 @@ export class CalendarMemoView extends ItemView {
     this.gridScrollEl.scrollTop = prevScrollTop + addedHeight;
 
     this.updateSelectionStyles();
+    this.applySearchHighlightClasses();
     this.isLoadingRows = false;
   }
 
@@ -1001,6 +1420,7 @@ export class CalendarMemoView extends ItemView {
     this.lastRow = newLast;
 
     this.updateSelectionStyles();
+    this.applySearchHighlightClasses();
     this.isLoadingRows = false;
   }
 
@@ -1022,7 +1442,7 @@ export class CalendarMemoView extends ItemView {
   private setDisplayedMonth(year: number, month: number): void {
     const ym = `${year}-${month < 10 ? "0" : ""}${month}`;
     this.displayedYm = ym;
-    this.monthTitleEl.setText(`${year}년 ${month}월`);
+    this.monthTitleEl.setText(this.plugin.t().formatYearMonth(year, month));
     if (this.monthPickerInput.value !== ym) {
       this.monthPickerInput.value = ym;
     }
@@ -1073,13 +1493,14 @@ export class CalendarMemoView extends ItemView {
   public jumpToDate(
     dateKey: DateKey,
     smooth: boolean,
-    align: "center" | "start" = "center"
+    align: "center" | "start" = "center",
+    keepFocus = false
   ): void {
     const coord = dateKeyToCoord(dateKey, this.originWeekStart);
     const { year, month } = parseDateKey(dateKey);
 
     if (coord.row < this.firstRow - 12 || coord.row > this.lastRow + 12) {
-      this.rebuildAll(dateKey);
+      this.rebuildAll(dateKey, keepFocus);
       this.setDisplayedMonth(year, month);
       return;
     }
@@ -1094,7 +1515,9 @@ export class CalendarMemoView extends ItemView {
 
     this.scrollRowIntoView(coord.row, align, smooth);
     // preventScroll: true 없이 focus()를 호출하면 Chromium이 진행 중인 smooth scroll을 즉시 취소함
-    this.gridScrollEl.focus({ preventScroll: true });
+    if (!keepFocus) {
+      this.gridScrollEl.focus({ preventScroll: true });
+    }
   }
 
   private scrollRowIntoView(
@@ -1164,7 +1587,7 @@ export class CalendarMemoView extends ItemView {
 
   private onGridKeyDown(e: KeyboardEvent): void {
     // 팝오버가 열려있거나 인풋에 포커스가 있으면 그리드 단축키를 가로채지 않음
-    if (this.activePopover?.isActive()) return;
+    if (this.hasAnyPopoverOpen()) return;
     const activeTag = (document.activeElement?.tagName ?? "").toLowerCase();
     if (activeTag === "input" || activeTag === "textarea") return;
 
@@ -1193,16 +1616,27 @@ export class CalendarMemoView extends ItemView {
       return;
     }
 
-    // Enter: 포커스된 날짜 셀 팝오버 열기
+    // [ID 6.8] Enter: 다중 선택(2개 이상) 시 공통 일괄 입력 팝오버, 단일 셀이면 개별 팝오버 열기
     if (e.key === "Enter" && !isMod && !e.shiftKey && !e.altKey) {
       e.preventDefault();
+      const selectedCells = getSelectedCells(
+        this.selection,
+        this.originWeekStart
+      );
       const focusKey = coordToDateKey(
         this.selection.focus.row,
         this.selection.focus.col,
         this.originWeekStart
       );
       const cellEl = this.cellElements.get(focusKey);
-      if (cellEl) {
+      if (!cellEl) return;
+
+      if (selectedCells.length > 1) {
+        this.openBatchPopover(
+          selectedCells.map((c) => c.dateKey),
+          cellEl
+        );
+      } else {
         this.openPopover(focusKey, cellEl);
       }
       return;
@@ -1215,22 +1649,29 @@ export class CalendarMemoView extends ItemView {
       return;
     }
 
-    // 복사 (Ctrl/Cmd + C)
-    if (isMod && (e.key === "c" || e.key === "C")) {
+    // 복사 (Ctrl/Cmd + C, 한글 IME 상태 e.code 병행)
+    if (isMod && (e.key === "c" || e.key === "C" || e.code === "KeyC")) {
       e.preventDefault();
       void this.copySelection();
       return;
     }
 
+    // [ID 7.5.1] 잘라내기 (Ctrl/Cmd + X)
+    if (isMod && (e.key === "x" || e.key === "X" || e.code === "KeyX")) {
+      e.preventDefault();
+      void this.cutSelection();
+      return;
+    }
+
     // 붙여넣기 (Ctrl/Cmd + V)
-    if (isMod && (e.key === "v" || e.key === "V")) {
+    if (isMod && (e.key === "v" || e.key === "V" || e.code === "KeyV")) {
       e.preventDefault();
       void this.pasteIntoSelection();
       return;
     }
 
     // Undo (Ctrl/Cmd + Z) / Redo (Ctrl/Cmd + Y 또는 Ctrl/Cmd + Shift + Z)
-    if (isMod && (e.key === "z" || e.key === "Z")) {
+    if (isMod && (e.key === "z" || e.key === "Z" || e.code === "KeyZ")) {
       e.preventDefault();
       if (e.shiftKey) {
         void this.performRedo();
@@ -1239,9 +1680,19 @@ export class CalendarMemoView extends ItemView {
       }
       return;
     }
-    if (isMod && (e.key === "y" || e.key === "Y")) {
+    if (isMod && (e.key === "y" || e.key === "Y" || e.code === "KeyY")) {
       e.preventDefault();
       void this.performRedo();
+      return;
+    }
+
+    // ESC: 찾기 모드가 켜져 있으면 종료
+    if (
+      (e.key === "Escape" || e.code === "Escape") &&
+      !this.searchBarEl.hasClass("is-hidden")
+    ) {
+      e.preventDefault();
+      this.closeSearchBar();
       return;
     }
 
@@ -1303,13 +1754,34 @@ export class CalendarMemoView extends ItemView {
   }
 
   // ==========================================================================
-  // 팝오버 편집기 열기
+  // 팝오버 편집기 열기 (단일 셀 / 다중 셀 공통 입력)
   // ==========================================================================
   private openPopover(dateKey: DateKey, cellEl: HTMLElement): void {
     if (this.activePopover?.isActive()) {
       void this.activePopover.close();
     }
-    const activeTab = this.getActiveTab();
+    if (this.activeBatchPopover?.isActive()) {
+      this.activeBatchPopover.close();
+    }
+
+    // 전체 보기 모드에서 열 경우 해당 날짜에 메모가 있는 첫 탭(없으면 마지막 활성 폴더 탭)을 기본 선택하되,
+    // 팝오버 상단 달력 선택 바에서 1클릭 전환 및 '동시 입력' 전환이 가능하도록 모든 탭 목록을 전달함.
+    const allMode = this.isAllTabsMode();
+    const tabsWithMemo = new Set<string>();
+    let targetTab = this.getActiveTab();
+    if (allMode) {
+      for (const t of this.plugin.settings.tabs) {
+        const cached = this.plugin.vaultSync.getCachedContent(t.id, dateKey);
+        if (cached && cached.trim().length > 0) {
+          tabsWithMemo.add(t.id);
+        }
+      }
+      const firstWithContent = this.plugin.settings.tabs.find((t) =>
+        tabsWithMemo.has(t.id)
+      );
+      if (firstWithContent) targetTab = firstWithContent;
+    }
+
     const meta: DayCalendarMeta = this.plugin.koreanCalendar.getDayMeta(
       dateKey,
       this.plugin.settings.lunarDisplay,
@@ -1319,11 +1791,18 @@ export class CalendarMemoView extends ItemView {
     this.activePopover = new CalendarPopoverEditor({
       app: this.app,
       vaultSync: this.plugin.vaultSync,
-      tab: activeTab,
+      tab: targetTab,
+      allTabs: this.plugin.settings.tabs,
+      tabsWithMemo,
       dateKey,
       meta,
       anchorRect: cellEl.getBoundingClientRect(),
       initialSize: this.plugin.settings.popoverSize,
+      strings: this.plugin.t(),
+      showTabBadge: allMode,
+      onSwitchToMultiCalendar: () => {
+        this.openBatchPopover([dateKey], cellEl, true);
+      },
       onSizeChange: (nextSize) => {
         this.plugin.settings.popoverSize = nextSize;
         void this.plugin.saveSettings();
@@ -1338,6 +1817,255 @@ export class CalendarMemoView extends ItemView {
         this.gridScrollEl.focus({ preventScroll: true });
       },
     });
+  }
+
+  /**
+   * [ID 6.8] 다중 선택된 날짜(또는 여러 달력)에 공통 문구·배경색을 일괄 입력하는 팝오버 열기
+   */
+  private openBatchPopover(
+    dateKeys: DateKey[],
+    anchorCellEl: HTMLElement,
+    selectAllTabsByDefault = false
+  ): void {
+    if (this.activePopover?.isActive()) {
+      void this.activePopover.close();
+    }
+    if (this.activeBatchPopover?.isActive()) {
+      this.activeBatchPopover.close();
+    }
+
+    const initialTabIds = selectAllTabsByDefault
+      ? this.plugin.settings.tabs.map((t) => t.id)
+      : [this.getActiveTab().id];
+
+    this.activeBatchPopover = new CalendarBatchPopover({
+      app: this.app,
+      dateKeys,
+      tabs: this.plugin.settings.tabs,
+      initialSelectedTabIds: initialTabIds,
+      anchorRect: anchorCellEl.getBoundingClientRect(),
+      strings: this.plugin.t(),
+      onApply: (result) => {
+        this.activeBatchPopover = null;
+        void this.applyBatchInput(dateKeys, result);
+        this.gridScrollEl.focus({ preventScroll: true });
+      },
+      onCancel: () => {
+        this.activeBatchPopover = null;
+        this.gridScrollEl.focus({ preventScroll: true });
+      },
+    });
+  }
+
+  private async applyBatchInput(
+    dateKeys: DateKey[],
+    result: BatchPopoverResult
+  ): Promise<void> {
+    const s = this.plugin.t();
+    const targetTabs = this.plugin.settings.tabs.filter((t) =>
+      result.targetTabIds.includes(t.id)
+    );
+    if (targetTabs.length === 0) return;
+
+    const changes: HistoryChange[] = [];
+    const hasText = result.content.trim().length > 0;
+    let colorDirty = false;
+    const allMode = this.isAllTabsMode();
+    const activeTabId = this.getActiveTab().id;
+
+    for (const targetTab of targetTabs) {
+      if (
+        result.colorAction === "set" &&
+        !this.plugin.settings.cellColors[targetTab.id]
+      ) {
+        this.plugin.settings.cellColors[targetTab.id] = {};
+      }
+      const tabColors = this.plugin.settings.cellColors[targetTab.id];
+
+      for (const dateKey of dateKeys) {
+        if (hasText) {
+          const before = await this.plugin.vaultSync.readMemo(
+            targetTab,
+            dateKey
+          );
+          const merged = mergeMemoContentForAppend(before, result.content);
+          if (before !== merged) {
+            changes.push({
+              type: "content",
+              tabId: targetTab.id,
+              dateKey,
+              before,
+              after: merged,
+            });
+            await this.plugin.vaultSync.writeMemo(targetTab, dateKey, merged);
+          }
+        }
+
+        if (result.colorAction === "set") {
+          const beforeColor = tabColors[dateKey] ?? "";
+          if (beforeColor !== result.colorId) {
+            changes.push({
+              type: "color",
+              tabId: targetTab.id,
+              dateKey,
+              before: beforeColor,
+              after: result.colorId,
+            });
+            if (result.colorId) {
+              tabColors[dateKey] = result.colorId;
+            } else {
+              delete tabColors[dateKey];
+            }
+            colorDirty = true;
+          }
+        }
+      }
+    }
+
+    if (colorDirty) {
+      await this.plugin.saveSettings();
+      // 변경된 날짜 셀 배경색 즉시 반영
+      for (const dateKey of dateKeys) {
+        const cellEl = this.cellElements.get(dateKey);
+        if (!cellEl) continue;
+        const displayTabId = allMode
+          ? this.plugin.settings.tabs.find(
+              (t) => this.plugin.settings.cellColors[t.id]?.[dateKey]
+            )?.id ?? activeTabId
+          : activeTabId;
+        this.applyCellColorClass(cellEl, displayTabId, dateKey);
+      }
+    }
+
+    if (changes.length > 0) {
+      this.undoHistory.push({
+        label: s.batchTitle(dateKeys.length),
+        changes,
+      });
+      this.updateUndoRedoButtons();
+      new Notice(s.batchAppliedNotice(dateKeys.length, targetTabs.length));
+    }
+  }
+
+  // ==========================================================================
+  // [ID 5.7] 드래그 앤 드롭 노트 링크 연결 ([[파일이름]])
+  // ==========================================================================
+  private hasDroppableNote(e: DragEvent): boolean {
+    const dragManager = (
+      this.app as unknown as {
+        dragManager?: {
+          draggable?: { type?: string; file?: unknown; files?: unknown[] };
+        };
+      }
+    ).dragManager;
+    const draggable = dragManager?.draggable;
+    if (
+      draggable &&
+      (draggable.type === "file" ||
+        draggable.type === "files" ||
+        draggable.type === "link")
+    ) {
+      return true;
+    }
+    const types = e.dataTransfer?.types;
+    return Boolean(types && types.includes("text/plain"));
+  }
+
+  private resolveDroppedFiles(e: DragEvent): TFile[] {
+    const result: TFile[] = [];
+    const seen = new Set<string>();
+    const addFile = (f: unknown) => {
+      if (f instanceof TFile && !seen.has(f.path)) {
+        seen.add(f.path);
+        result.push(f);
+      }
+    };
+
+    // 1순위: 옵시디언 내부 dragManager.draggable (탐색기 단일/다중 선택, 탭 헤더 드래그 모두 대응)
+    const dragManager = (
+      this.app as unknown as {
+        dragManager?: {
+          draggable?: { file?: unknown; files?: unknown[] };
+        };
+      }
+    ).dragManager;
+    const draggable = dragManager?.draggable;
+    if (draggable?.file) addFile(draggable.file);
+    if (Array.isArray(draggable?.files)) {
+      for (const f of draggable.files) addFile(f);
+    }
+
+    // 2순위: dataTransfer의 obsidian://open?file=... URI 폴백
+    if (result.length === 0 && e.dataTransfer) {
+      const raw = e.dataTransfer.getData("text/plain");
+      if (raw) {
+        const extractedPath = parseObsidianUriToFilePath(raw);
+        if (extractedPath) {
+          const direct =
+            this.app.vault.getAbstractFileByPath(extractedPath) ??
+            this.app.vault.getAbstractFileByPath(`${extractedPath}.md`);
+          addFile(direct);
+          if (result.length === 0) {
+            const dest = this.app.metadataCache.getFirstLinkpathDest(
+              extractedPath,
+              ""
+            );
+            addFile(dest);
+          }
+        }
+      }
+    }
+
+    return result;
+  }
+
+  private async appendDroppedNoteLinks(
+    dateKey: DateKey,
+    files: TFile[]
+  ): Promise<void> {
+    const activeTab = this.getActiveTab();
+    const targetNotePath = this.plugin.vaultSync.getNotePath(activeTab, dateKey);
+
+    const links = files.map((file) => {
+      if (file.extension === "md") {
+        // 같은 이름의 파일이 볼트에 유일하면 깔끔하게 [[파일이름]], 중복이면 경로 포함 링크 생성
+        const resolved = this.app.metadataCache.getFirstLinkpathDest(
+          file.basename,
+          targetNotePath
+        );
+        if (!resolved || resolved.path === file.path) {
+          return `[[${file.basename}]]`;
+        }
+        const noExt = file.path.replace(/\.md$/, "");
+        return `[[${noExt}|${file.basename}]]`;
+      }
+      return `[[${file.name}]]`;
+    });
+
+    const before = await this.plugin.vaultSync.readMemo(activeTab, dateKey);
+    const merged = mergeMemoContentForAppend(before, links.join("\n"));
+
+    if (before !== merged) {
+      await this.plugin.vaultSync.writeMemo(activeTab, dateKey, merged);
+      this.undoHistory.push({
+        label: "노트 링크 추가",
+        changes: [
+          {
+            type: "content",
+            tabId: activeTab.id,
+            dateKey,
+            before,
+            after: merged,
+          },
+        ],
+      });
+      this.updateUndoRedoButtons();
+      new Notice(
+        links.length === 1
+          ? `${dateKey}에 ${links[0]} 링크 추가됨`
+          : `${dateKey}에 ${links.length}개 노트 링크 추가됨`
+      );
+    }
   }
 
   // ==========================================================================
@@ -1574,24 +2302,179 @@ export class CalendarMemoView extends ItemView {
     this.redoBtn.disabled = !this.undoHistory.canRedo();
   }
 
+  // ==========================================================================
+  // [ID 7.5] 잘라내기(Cut) 및 미완료 할 일(- [ ]) 이월 (내일 / 다음 영업일)
+  // ==========================================================================
+  private async cutSelection(): Promise<void> {
+    const activeTab = this.getActiveTab();
+    const s = this.plugin.t();
+    const selected = getSelectedCells(this.selection, this.originWeekStart);
+    const bounds = getRectBounds(this.selection);
+
+    const entries: Array<{
+      dateKey: DateKey;
+      relRow: number;
+      relCol: number;
+      content: string;
+    }> = [];
+    const changes: HistoryChange[] = [];
+
+    for (const cell of selected) {
+      const content = await this.plugin.vaultSync.readMemo(
+        activeTab,
+        cell.dateKey
+      );
+      entries.push({
+        dateKey: cell.dateKey,
+        relRow: cell.relRow,
+        relCol: cell.relCol,
+        content,
+      });
+      if (content.trim().length > 0) {
+        changes.push({
+          type: "content",
+          tabId: activeTab.id,
+          dateKey: cell.dateKey,
+          before: content,
+          after: "",
+        });
+        await this.plugin.vaultSync.writeMemo(activeTab, cell.dateKey, "");
+      }
+    }
+
+    const externalText = formatExternalClipboardText(entries);
+    this.internalClipboard = {
+      width: bounds.maxCol - bounds.minCol + 1,
+      height: bounds.maxRow - bounds.minRow + 1,
+      cells: entries.map((e) => ({
+        relRow: e.relRow,
+        relCol: e.relCol,
+        content: e.content,
+      })),
+      externalText,
+    };
+
+    try {
+      await navigator.clipboard.writeText(externalText);
+    } catch {
+      // ignore
+    }
+
+    if (changes.length > 0) {
+      this.undoHistory.push({ label: s.ctxCut, changes });
+      this.updateUndoRedoButtons();
+      new Notice(s.noticeCut(changes.length));
+    }
+  }
+
+  private async carryOverIncompleteTasks(
+    sourceDateKey: DateKey,
+    mode: "tomorrow" | "nextBusinessDay"
+  ): Promise<void> {
+    const activeTab = this.getActiveTab();
+    const s = this.plugin.t();
+    const sourceContent = await this.plugin.vaultSync.readMemo(
+      activeTab,
+      sourceDateKey
+    );
+    const { remaining, movedTasks } = extractIncompleteTasks(sourceContent);
+
+    if (movedTasks.length === 0) {
+      new Notice(s.noticeNoIncompleteTasks);
+      return;
+    }
+
+    let targetDateKey = addDays(sourceDateKey, 1);
+    if (mode === "nextBusinessDay") {
+      let guard = 0;
+      while (
+        !this.plugin.koreanCalendar.isBusinessDay(targetDateKey) &&
+        guard < 30
+      ) {
+        targetDateKey = addDays(targetDateKey, 1);
+        guard++;
+      }
+    }
+
+    const targetBefore = await this.plugin.vaultSync.readMemo(
+      activeTab,
+      targetDateKey
+    );
+    const targetAfter = mergeMemoContentForAppend(
+      targetBefore,
+      movedTasks.join("\n")
+    );
+
+    const changes: HistoryChange[] = [
+      {
+        type: "content",
+        tabId: activeTab.id,
+        dateKey: sourceDateKey,
+        before: sourceContent,
+        after: remaining,
+      },
+      {
+        type: "content",
+        tabId: activeTab.id,
+        dateKey: targetDateKey,
+        before: targetBefore,
+        after: targetAfter,
+      },
+    ];
+
+    await this.plugin.vaultSync.writeMemo(activeTab, sourceDateKey, remaining);
+    await this.plugin.vaultSync.writeMemo(activeTab, targetDateKey, targetAfter);
+
+    this.undoHistory.push({
+      label:
+        mode === "tomorrow" ? s.ctxCarryTomorrow : s.ctxCarryNextBizDay,
+      changes,
+    });
+    this.updateUndoRedoButtons();
+    new Notice(s.noticeCarriedTasks(movedTasks.length, targetDateKey));
+  }
+
   private showCellContextMenu(
     e: MouseEvent,
     dateKey: DateKey,
     cellEl: HTMLElement
   ): void {
     const activeTab = this.getActiveTab();
+    const s = this.plugin.t();
+    const selectedCells = getSelectedCells(this.selection, this.originWeekStart);
     const menu = new Menu();
+
+    if (selectedCells.length > 1) {
+      menu.addItem((item) =>
+        item
+          .setTitle(s.ctxBatchEdit(selectedCells.length))
+          .setIcon("layers")
+          .onClick(() =>
+            this.openBatchPopover(
+              selectedCells.map((c) => c.dateKey),
+              cellEl
+            )
+          )
+      );
+    } else if (this.plugin.settings.tabs.length > 1) {
+      menu.addItem((item) =>
+        item
+          .setTitle(s.ctxMultiCalendarInput)
+          .setIcon("layers")
+          .onClick(() => this.openBatchPopover([dateKey], cellEl, true))
+      );
+    }
 
     menu.addItem((item) =>
       item
-        .setTitle("팝오버로 편집 (Enter)")
+        .setTitle(s.ctxEditPopover)
         .setIcon("edit-3")
         .onClick(() => this.openPopover(dateKey, cellEl))
     );
 
     menu.addItem((item) =>
       item
-        .setTitle("노트 탭으로 열기")
+        .setTitle(s.ctxOpenAsNote)
         .setIcon("external-link")
         .onClick(async () => {
           const file = await this.plugin.vaultSync.ensureFileExists(
@@ -1606,21 +2489,46 @@ export class CalendarMemoView extends ItemView {
 
     menu.addItem((item) =>
       item
-        .setTitle("선택 셀 복사")
+        .setTitle(s.ctxCarryTomorrow)
+        .setIcon("arrow-right-circle")
+        .onClick(() => void this.carryOverIncompleteTasks(dateKey, "tomorrow"))
+    );
+
+    menu.addItem((item) =>
+      item
+        .setTitle(s.ctxCarryNextBizDay)
+        .setIcon("briefcase")
+        .onClick(
+          () => void this.carryOverIncompleteTasks(dateKey, "nextBusinessDay")
+        )
+    );
+
+    menu.addSeparator();
+
+    menu.addItem((item) =>
+      item
+        .setTitle(s.ctxCopy)
         .setIcon("copy")
         .onClick(() => void this.copySelection())
     );
 
     menu.addItem((item) =>
       item
-        .setTitle("선택 셀에 붙여넣기")
+        .setTitle(s.ctxCut)
+        .setIcon("scissors")
+        .onClick(() => void this.cutSelection())
+    );
+
+    menu.addItem((item) =>
+      item
+        .setTitle(s.ctxPaste)
         .setIcon("clipboard-paste")
         .onClick(() => void this.pasteIntoSelection())
     );
 
     menu.addItem((item) =>
       item
-        .setTitle("선택 셀 내용 삭제")
+        .setTitle(s.ctxDelete)
         .setIcon("trash-2")
         .onClick(() => void this.deleteSelectionContent())
     );
@@ -1629,9 +2537,10 @@ export class CalendarMemoView extends ItemView {
 
     // 배경색 빠른 지정
     for (const preset of CELL_COLOR_PRESETS) {
+      const label = s.colorLabels[preset.id] ?? preset.label;
       menu.addItem((item) =>
         item
-          .setTitle(`배경색: ${preset.label}`)
+          .setTitle(`${s.ctxBgColorPrefix}: ${label}`)
           .setIcon(preset.id ? "palette" : "eraser")
           .onClick(() => void this.applyColorToSelection(preset.id))
       );
@@ -1641,7 +2550,7 @@ export class CalendarMemoView extends ItemView {
 
     menu.addItem((item) =>
       item
-        .setTitle("이 날짜부터 반복 일정 추가")
+        .setTitle(s.ctxAddRecurringFromDate)
         .setIcon("repeat")
         .onClick(() => {
           new RecurringEventsModal(

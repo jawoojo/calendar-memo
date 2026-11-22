@@ -171,6 +171,76 @@ export function mergeMemoContentForAppend(
   return `${trimmedExisting}\n${trimmedIncoming}`;
 }
 
+// [ID 7.5] 미완료 할 일(- [ ]) 추출 및 다음 날/다음 영업일 이월 유틸리티
+// -> 완료된 항목(- [x])과 일반 메모는 원래 날짜에 기록으로 남기고, 미완료 체크박스와
+//    그 아래에 더 깊게 들여쓰기된 하위 메모만 분리해 대상 날짜로 옮길 수 있게 함.
+export function extractIncompleteTasks(markdown: string): {
+  remaining: string;
+  movedTasks: string[];
+} {
+  const fmMatch = markdown.match(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/);
+  const frontmatter = fmMatch ? fmMatch[0] : "";
+  const body = fmMatch ? markdown.slice(frontmatter.length) : markdown;
+
+  const lines = body.split(/\r?\n/);
+  const keptLines: string[] = [];
+  const movedTasks: string[] = [];
+
+  const uncheckedRegex = /^([ \t]*)(?:[-*+]|\d+[.)])[ \t]+\[ \](?:[ \t]|$)/;
+  let capturingIndent: number | null = null;
+  let currentBlock: string[] = [];
+
+  const flushBlock = () => {
+    if (currentBlock.length > 0) {
+      movedTasks.push(currentBlock.join("\n"));
+      currentBlock = [];
+    }
+    capturingIndent = null;
+  };
+
+  for (const line of lines) {
+    const match = line.match(uncheckedRegex);
+    if (match) {
+      const indentLen = match[1].replace(/\t/g, "  ").length;
+      if (capturingIndent !== null && indentLen > capturingIndent) {
+        // 미완료 항목의 하위 미완료 체크박스는 같은 블록으로 유지
+        currentBlock.push(line);
+      } else {
+        flushBlock();
+        capturingIndent = indentLen;
+        currentBlock.push(line);
+      }
+      continue;
+    }
+
+    if (capturingIndent !== null) {
+      const lineIndent = (line.match(/^([ \t]*)/)?.[1] ?? "").replace(/\t/g, "  ").length;
+      if (line.trim().length > 0 && lineIndent > capturingIndent) {
+        currentBlock.push(line);
+        continue;
+      }
+      flushBlock();
+    }
+
+    keptLines.push(line);
+  }
+  flushBlock();
+
+  const remainingBody = keptLines
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
+  const remaining =
+    remainingBody.length > 0
+      ? frontmatter
+        ? `${frontmatter}${remainingBody}`
+        : remainingBody
+      : "";
+
+  return { remaining, movedTasks };
+}
+
 // [ID 7.3] 그리드 레벨 Undo / Redo 히스토리 스택
 // -> 셀 복붙, 일괄 삭제, 셀 배경색 변경을 하나의 배치 단위로 기록하여 Ctrl/Cmd+Z, Y로 원자적 되돌리기를 지원함.
 export type HistoryChange =

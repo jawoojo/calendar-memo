@@ -1,7 +1,7 @@
 {
   "id": "calendar-memo",
   "name": "Calendar Memo",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "minAppVersion": "1.5.0",
   "description": "Memoit-style continuous monthly grid calendar with Obsidian native Live Preview popover editor, Korean holidays/lunar calendar, recurring schedules, and folder tabs.",
   "author": "Calendar Memo",

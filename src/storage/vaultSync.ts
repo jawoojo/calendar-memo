@@ -187,6 +187,49 @@ export class VaultSyncManager {
   }
 
   /**
+   * [ID 4.7] 특정 탭(또는 전체 탭)의 모든 날짜 .md 파일을 대상으로 키워드 검색 수행
+   * -> 아직 스크롤로 로드되지 않은 과거/미래 연도의 메모까지 즉시 찾아내어 점프할 수 있게 함.
+   */
+  async searchNotesByQuery(
+    tabs: CalendarTab[],
+    query: string
+  ): Promise<DateKey[]> {
+    const needle = query.trim().toLowerCase();
+    if (!needle) return [];
+
+    const matchedDates = new Set<DateKey>();
+    const mdFiles = this.app.vault.getMarkdownFiles();
+
+    for (const file of mdFiles) {
+      for (const tab of tabs) {
+        const dateKey = parseNotePathToDateKey(
+          file.path,
+          tab.folderPath,
+          tab.dateFormat
+        );
+        if (!dateKey) continue;
+
+        let content = this.getCachedContent(tab.id, dateKey);
+        if (content === undefined) {
+          content = await this.app.vault.cachedRead(file);
+          let tabMap = this.contentCache.get(tab.id);
+          if (!tabMap) {
+            tabMap = new Map();
+            this.contentCache.set(tab.id, tabMap);
+          }
+          tabMap.set(dateKey, content);
+        }
+
+        if (content.toLowerCase().includes(needle)) {
+          matchedDates.add(dateKey);
+        }
+      }
+    }
+
+    return Array.from(matchedDates).sort();
+  }
+
+  /**
    * 볼트 내 모든 폴더 목록을 자동완성/선택 UI용으로 반환함.
    */
   getAllVaultFolders(): string[] {

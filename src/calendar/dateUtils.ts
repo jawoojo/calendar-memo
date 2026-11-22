@@ -166,6 +166,21 @@ export function remapTabFolderPath(
   return null;
 }
 
+// [ID 5.7] 드래그 앤 드롭된 obsidian://open URI에서 볼트 내 파일 경로 추출
+// -> 탐색기/탭 드래그 시 dragManager.draggable 폴백으로 dataTransfer 텍스트 URI를 파싱하기 위해 사용함.
+export function parseObsidianUriToFilePath(rawText: string): string | null {
+  const trimmed = rawText.trim();
+  if (!trimmed.startsWith("obsidian://")) return null;
+  try {
+    const url = new URL(trimmed);
+    const fileParam = url.searchParams.get("file");
+    if (!fileParam) return null;
+    return decodeURIComponent(fileParam).replace(/^\/+/, "");
+  } catch {
+    return null;
+  }
+}
+
 /**
  * 순수 토큰 포맷터 (window.moment 부재 시 폴백).
  * Moment의 [리터럴], YYYY, YY, MM, M, DD, D, dddd, ddd 토큰을 지원함.

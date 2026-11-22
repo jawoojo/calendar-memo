@@ -369,6 +369,27 @@ button.cm-color-swatch.cm-swatch-gray, .cm-dot-gray { background-color: #64748b;
   z-index: 2;
 }
 
+/* [ID 5.7] 노트 드래그 앤 드롭 대상 날짜 셀 하이라이트 */
+.cm-day-cell.is-drag-over {
+  box-shadow: inset 0 0 0 2px var(--interactive-accent);
+  background-color: hsla(var(--accent-h), var(--accent-s), var(--accent-l), 0.16) !important;
+}
+
+.cm-day-cell.is-drag-over::before {
+  content: "+ [[링크 추가]]";
+  position: absolute;
+  right: 6px;
+  bottom: 4px;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--text-on-accent);
+  background: var(--interactive-accent);
+  padding: 1px 6px;
+  border-radius: 4px;
+  pointer-events: none;
+  z-index: 5;
+}
+
 /* 셀 상단 날짜·공휴일·음력 헤더 */
 .cm-cell-header {
   display: flex;
@@ -732,6 +753,16 @@ button.cm-popover-size-btn.is-active {
   color: var(--color-red, #e5484d);
 }
 
+.cm-popover-tab-badge {
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--background-modifier-border);
+  color: var(--text-normal);
+  white-space: nowrap;
+}
+
 .cm-popover-holiday-badge {
   font-size: 11px;
   font-weight: 600;
@@ -767,6 +798,85 @@ button.cm-popover-size-btn.is-active {
 .cm-popover.is-compact .cm-popover-hint {
   display: none;
 }
+
+/* [ID 6.7] 편집 팝오버 빠른 서식 툴바 */
+.cm-popover-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 4px 10px;
+  background: var(--background-primary);
+  border-bottom: 1px solid var(--background-modifier-border);
+  flex-shrink: 0;
+  overflow-x: auto;
+}
+
+button.cm-fmt-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 6px;
+  border-radius: 5px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--text-muted);
+  background: transparent;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+button.cm-fmt-btn:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+
+.cm-fmt-icon {
+  display: inline-flex;
+  align-items: center;
+}
+
+.cm-fmt-icon svg {
+  width: 13px;
+  height: 13px;
+}
+
+.cm-fmt-divider {
+  width: 1px;
+  height: 14px;
+  background: var(--background-modifier-border);
+  margin: 0 3px;
+  flex-shrink: 0;
+}
+
+.cm-fmt-hl-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+button.cm-fmt-hl-dot {
+  width: 14px;
+  height: 14px;
+  min-width: 14px;
+  min-height: 14px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid rgba(128, 128, 128, 0.4);
+  cursor: pointer;
+  opacity: 0.9;
+  transition: transform 0.1s ease, opacity 0.1s ease;
+}
+
+button.cm-fmt-hl-dot:hover {
+  transform: scale(1.18);
+  opacity: 1;
+}
+
+button.cm-fmt-hl-dot.cm-swatch-yellow { background-color: #eab308; }
+button.cm-fmt-hl-dot.cm-swatch-blue { background-color: #3b82f6; }
+button.cm-fmt-hl-dot.cm-swatch-amber { background-color: #f59e0b; }
+button.cm-fmt-hl-dot.cm-swatch-green { background-color: #22c55e; }
+button.cm-fmt-hl-dot.cm-swatch-rose { background-color: #f43f5e; }
 
 .cm-popover-editor-host {
   flex: 1;
@@ -927,5 +1037,232 @@ button.cm-popover-size-btn.is-active {
 .cm-weekday-btn.is-active {
   background: var(--interactive-accent);
   color: var(--text-on-accent);
+}
+
+/* =========================================================================
+ * [ID 5.8] 캘린더 내부 즉시 검색 바 & 필터 하이라이트
+ * ========================================================================= */
+.cm-search-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: var(--background-secondary);
+  border-bottom: 1px solid var(--background-modifier-border);
+  flex-shrink: 0;
+}
+
+.cm-search-bar.is-hidden {
+  display: none;
+}
+
+.cm-search-input {
+  flex: 1;
+  max-width: 340px;
+  height: 28px;
+  font-size: 13px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--background-modifier-border);
+  background: var(--background-primary);
+  color: var(--text-normal);
+}
+
+.cm-search-count {
+  font-size: 12px;
+  color: var(--text-muted);
+  min-width: 56px;
+  text-align: center;
+}
+
+.cm-grid-body.is-search-active .cm-day-cell:not(.is-search-match) {
+  opacity: 0.32;
+}
+
+.cm-grid-body.is-search-active .cm-day-cell.is-search-match {
+  opacity: 1;
+  box-shadow: inset 0 0 0 1.5px var(--interactive-accent);
+}
+
+.cm-grid-body.is-search-active .cm-day-cell.is-search-current {
+  box-shadow: inset 0 0 0 2.5px var(--interactive-accent);
+}
+
+/* =========================================================================
+ * [ID 5.9] 전체 탭 합쳐보기 모드 셀 블록 스타일
+ * ========================================================================= */
+.cm-tab-item.cm-tab-all {
+  font-weight: 700;
+}
+
+.cm-all-tab-block {
+  margin-bottom: 4px;
+  padding: 2px 4px;
+  border-radius: 4px;
+  border-left: 2.5px solid var(--interactive-accent);
+  background: rgba(128, 128, 128, 0.06);
+}
+
+.cm-all-tab-block.cm-tab-color-0 { border-left-color: #3b82f6; }
+.cm-all-tab-block.cm-tab-color-1 { border-left-color: #22c55e; }
+.cm-all-tab-block.cm-tab-color-2 { border-left-color: #f59e0b; }
+.cm-all-tab-block.cm-tab-color-3 { border-left-color: #a855f7; }
+.cm-all-tab-block.cm-tab-color-4 { border-left-color: #f43f5e; }
+.cm-all-tab-block.cm-tab-color-5 { border-left-color: #14b8a6; }
+
+.cm-all-tab-badge {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-muted);
+  cursor: pointer;
+  margin-bottom: 1px;
+}
+
+.cm-all-tab-badge:hover {
+  color: var(--interactive-accent);
+  text-decoration: underline;
+}
+
+/* =========================================================================
+ * [ID 6.8] 다중 날짜 공통 입력 & 대상 달력 선택 바 스타일
+ * ========================================================================= */
+.cm-popover-tab-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 5px 10px;
+  background: var(--background-secondary);
+  border-bottom: 1px solid var(--background-modifier-border);
+  flex-shrink: 0;
+}
+
+.cm-popover-tab-chips {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+}
+
+.cm-batch-tabs-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 5px 10px;
+  background: var(--background-secondary);
+  border-bottom: 1px solid var(--background-modifier-border);
+  flex-shrink: 0;
+}
+
+.cm-batch-row-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  margin-right: 2px;
+}
+
+button.cm-target-tab-chip,
+button.cm-batch-all-cal-btn,
+button.cm-popover-multi-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 5px;
+  border: 1px solid var(--background-modifier-border);
+  background: var(--background-primary);
+  color: var(--text-muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+button.cm-target-tab-chip .cm-chip-check {
+  display: none;
+  font-size: 10px;
+}
+
+button.cm-target-tab-chip.is-active .cm-chip-check {
+  display: inline;
+}
+
+button.cm-target-tab-chip.is-active,
+button.cm-batch-all-cal-btn.is-active {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  border-color: var(--interactive-accent);
+}
+
+button.cm-target-tab-chip:hover:not(.is-active),
+button.cm-batch-all-cal-btn:hover:not(.is-active),
+button.cm-popover-multi-btn:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+
+.cm-chip-has-memo-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--interactive-accent);
+  flex-shrink: 0;
+}
+
+button.cm-target-tab-chip.is-active .cm-chip-has-memo-dot {
+  background: var(--text-on-accent);
+}
+
+.cm-batch-color-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 5px 10px;
+  background: var(--background-secondary);
+  border-bottom: 1px solid var(--background-modifier-border);
+  flex-shrink: 0;
+}
+
+button.cm-batch-keep-btn {
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 5px;
+  border: 1px solid var(--background-modifier-border);
+  background: var(--background-primary);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+button.cm-batch-keep-btn.is-active {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  border-color: var(--interactive-accent);
+}
+
+.cm-batch-color-row button.cm-color-swatch.is-active {
+  box-shadow: 0 0 0 2px var(--background-primary), 0 0 0 4px var(--interactive-accent);
+  transform: scale(1.12);
+}
+
+.cm-batch-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 10px;
+  background: var(--background-secondary);
+  border-top: 1px solid var(--background-modifier-border);
+  flex-shrink: 0;
+}
+
+.cm-batch-footer-btns {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 

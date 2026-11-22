@@ -1,4 +1,4 @@
-import { DateKey, RecurringEvent } from "../types";
+import { ALL_TABS_ID, DateKey, RecurringEvent } from "../types";
 import {
   getDayOfWeek,
   getDaysInMonth,
@@ -42,8 +42,12 @@ export function doesRecurringEventOccurOn(
   activeTabId: string,
   isBusinessDay: IsBusinessDayFn
 ): boolean {
-  // 탭 범위 필터링 (모든 탭 공통 또는 현재 탭 전용)
-  if (event.scope === "tab" && event.tabId !== activeTabId) {
+  // 탭 범위 필터링 (전체 보기 모드이거나, 모든 탭 공통이거나, 현재 탭 전용 일치 시 표시)
+  if (
+    activeTabId !== ALL_TABS_ID &&
+    event.scope === "tab" &&
+    event.tabId !== activeTabId
+  ) {
     return false;
   }
 

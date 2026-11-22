@@ -7,6 +7,7 @@ import {
   diffDays,
   getWeekStart,
   parseNotePathToDateKey,
+  parseObsidianUriToFilePath,
   remapTabFolderPath,
 } from "../src/calendar/dateUtils";
 import { KoreanCalendarService } from "../src/calendar/koreanCalendar";
@@ -18,11 +19,13 @@ import {
 import {
   GridUndoHistory,
   computePasteTargets,
+  extractIncompleteTasks,
   formatExternalClipboardText,
   getSelectedCells,
   mergeMemoContentForAppend,
 } from "../src/editor/clipboardAndHistory";
-import { RecurringEvent } from "../src/types";
+import { ALL_TABS_ID, RecurringEvent } from "../src/types";
+import { getStrings } from "../src/i18n";
 import { matchEmojiHighlightPrefix } from "../src/ui/highlightHelper";
 
 describe("dateUtils & custom Daily Notes date formats", () => {
@@ -367,6 +370,74 @@ describe("Multi-country cached holidays (preserving Korean offline engine)", () 
     // 다시 KR로 복귀하면 기존 한국 오프라인 엔진 그대로 동작
     cal.setHolidayCountryConfig("KR", true, cache);
     expect(cal.getDayMeta("2026-03-02", "periodic", true).isHoliday).toBe(true);
+  });
+
+  it("extracts vault file path from obsidian://open drag URI", () => {
+    expect(
+      parseObsidianUriToFilePath(
+        "obsidian://open?vault=MyVault&file=%ED%9A%8C%EC%9D%98%EB%A1%9D%2F2026%20%EA%B3%84%ED%9A%8D"
+      )
+    ).toBe("회의록/2026 계획");
+    expect(parseObsidianUriToFilePath("plain text")).toBeNull();
+  });
+});
+
+describe("Carry-over incomplete tasks, All-tabs recurring, and i18n", () => {
+  it("extracts unchecked tasks with indented children while keeping completed tasks and notes", () => {
+    const md = [
+      "회의 메모",
+      "- [x] 완료된 할 일",
+      "- [ ] 미완료 할 일 1",
+      "  - 하위 참고사항",
+      "- [ ] 미완료 할 일 2",
+      "일반 문장",
+    ].join("\n");
+
+    const { remaining, movedTasks } = extractIncompleteTasks(md);
+    expect(movedTasks).toEqual([
+      "- [ ] 미완료 할 일 1\n  - 하위 참고사항",
+      "- [ ] 미완료 할 일 2",
+    ]);
+    expect(remaining).toBe("회의 메모\n- [x] 완료된 할 일\n일반 문장");
+  });
+
+  it("returns recurring events from all tabs when ALL_TABS_ID is active", () => {
+    const cal = new KoreanCalendarService();
+    const events: RecurringEvent[] = [
+      {
+        id: "t1",
+        title: "업무 루틴",
+        frequency: "daily",
+        startDate: "2026-01-01",
+        scope: "tab",
+        tabId: "work",
+        completedDates: [],
+        excludedDates: [],
+      },
+      {
+        id: "t2",
+        title: "개인 루틴",
+        frequency: "daily",
+        startDate: "2026-01-01",
+        scope: "tab",
+        tabId: "personal",
+        completedDates: [],
+        excludedDates: [],
+      },
+    ];
+    const allMatched = getRecurringEventsForDate(
+      events,
+      "2026-11-22",
+      ALL_TABS_ID,
+      (dk) => cal.isBusinessDay(dk)
+    );
+    expect(allMatched.map((x) => x.event.id)).toEqual(["t1", "t2"]);
+  });
+
+  it("provides Korean and English UI string tables", () => {
+    expect(getStrings("ko").todayBtn).toBe("오늘");
+    expect(getStrings("en").todayBtn).toBe("Today");
+    expect(getStrings("en").formatYearMonth(2026, 11)).toBe("Nov 2026");
   });
 });
 

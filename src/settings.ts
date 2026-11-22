@@ -1,5 +1,5 @@
 import { App, Notice, PluginSettingTab, Setting } from "obsidian";
-import { LunarDisplayMode } from "./types";
+import { LunarDisplayMode, UiLanguage } from "./types";
 import {
   CustomHolidaysModal,
   RecurringEventsModal,
@@ -9,7 +9,7 @@ import { getTodayKey } from "./calendar/dateUtils";
 import type CalendarMemoPlugin from "./main";
 
 // [ID 1.3] 플러그인 환경설정 탭
-// -> 주 시작 요일, 음력 표시, 기념일 표시, 뷰포트 주 수, 폴더 탭·반복 일정·커스텀 휴일 관리를 제공함.
+// -> 표시 언어(한국어/English/자동), 주 시작 요일, 음력 표시, 국가별 공휴일, 폴더 탭·반복 일정 관리를 제공함.
 
 export class CalendarMemoSettingTab extends PluginSettingTab {
   private plugin: CalendarMemoPlugin;
@@ -22,16 +22,35 @@ export class CalendarMemoSettingTab extends PluginSettingTab {
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
+    const s = this.plugin.t();
 
-    containerEl.createEl("h2", { text: "Calendar Memo 설정" });
+    containerEl.createEl("h2", { text: s.settingsTitle });
 
+    // [ID 1.4.1] UI 표시 언어 선택 (자동 / 한국어 / English)
     new Setting(containerEl)
-      .setName("주 시작 요일")
-      .setDesc("달력의 첫 번째 열에 표시할 요일을 선택합니다.")
+      .setName(s.settingLangName)
+      .setDesc(s.settingLangDesc)
       .addDropdown((dd) =>
         dd
-          .addOption("0", "일요일 시작 (일~토)")
-          .addOption("1", "월요일 시작 (월~일)")
+          .addOption("auto", s.settingLangAuto)
+          .addOption("ko", "한국어 (Korean)")
+          .addOption("en", "English")
+          .setValue(this.plugin.settings.uiLanguage)
+          .onChange(async (v) => {
+            this.plugin.settings.uiLanguage = v as UiLanguage;
+            await this.plugin.saveSettings();
+            this.plugin.refreshAllViews();
+            this.display();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName(s.settingWeekStartName)
+      .setDesc(s.settingWeekStartDesc)
+      .addDropdown((dd) =>
+        dd
+          .addOption("0", s.settingWeekStartSun)
+          .addOption("1", s.settingWeekStartMon)
           .setValue(String(this.plugin.settings.weekStartsOn))
           .onChange(async (v) => {
             this.plugin.settings.weekStartsOn = v === "1" ? 1 : 0;
@@ -41,13 +60,13 @@ export class CalendarMemoSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("한 화면에 표시할 주(Row) 수")
-      .setDesc("연속 스크롤 캘린더 뷰포트 높이에 맞춰 표시되는 기본 주 수입니다.")
+      .setName(s.settingWeeksPerViewName)
+      .setDesc(s.settingWeeksPerViewDesc)
       .addDropdown((dd) =>
         dd
-          .addOption("4", "4주 (셀 크게)")
-          .addOption("5", "5주 (표준 월간)")
-          .addOption("6", "6주 (넓게 조망)")
+          .addOption("4", s.lang === "en" ? "4 weeks (Larger cells)" : "4주 (셀 크게)")
+          .addOption("5", s.lang === "en" ? "5 weeks (Standard)" : "5주 (표준 월간)")
+          .addOption("6", s.lang === "en" ? "6 weeks (Compact)" : "6주 (넓게 조망)")
           .setValue(String(this.plugin.settings.visibleWeeksPerViewport))
           .onChange(async (v) => {
             this.plugin.settings.visibleWeeksPerViewport = Number(v) || 5;
@@ -57,13 +76,13 @@ export class CalendarMemoSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("음력 날짜 표시")
-      .setDesc("오프라인 내장 음력 엔진으로 음력 날짜를 셀 상단에 표시합니다.")
+      .setName(s.settingLunarName)
+      .setDesc(s.settingLunarDesc)
       .addDropdown((dd) =>
         dd
-          .addOption("periodic", "매월 음력 1일 · 15일 표시 (권장)")
-          .addOption("always", "매일 표시")
-          .addOption("off", "표시 안 함")
+          .addOption("periodic", s.settingLunarPeriodic)
+          .addOption("always", s.settingLunarAlways)
+          .addOption("off", s.settingLunarOff)
           .setValue(this.plugin.settings.lunarDisplay)
           .onChange(async (v) => {
             this.plugin.settings.lunarDisplay = v as LunarDisplayMode;
@@ -73,10 +92,8 @@ export class CalendarMemoSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("한국 주요 기념일 표시")
-      .setDesc(
-        "공휴일 국가가 대한민국(KR)일 때 어버이날, 스승의날, 정월대보름 등 주요 기념일을 표시합니다."
-      )
+      .setName(s.settingAnnivName)
+      .setDesc(s.settingAnnivDesc)
       .addToggle((tg) =>
         tg
           .setValue(this.plugin.settings.showAnniversaries)
@@ -88,7 +105,7 @@ export class CalendarMemoSettingTab extends PluginSettingTab {
       );
 
     // [ID 2.5.4] 다국가 공휴일 선택 및 온디맨드 캐시 관리 UI
-    containerEl.createEl("h3", { text: "국가별 공휴일 (Holidays by Country)" });
+    containerEl.createEl("h3", { text: s.settingHolidaySection });
 
     const currentCountry = this.plugin.settings.holidayCountry || "KR";
     const cachedYears = Object.keys(
@@ -97,15 +114,23 @@ export class CalendarMemoSettingTab extends PluginSettingTab {
 
     const countryDesc =
       currentCountry === "KR"
-        ? "대한민국 공휴일은 플러그인에 내장되어 완전 오프라인으로 동작합니다."
+        ? s.lang === "en"
+          ? "South Korea holidays are built-in and work 100% offline."
+          : "대한민국 공휴일은 플러그인에 내장되어 완전 오프라인으로 동작합니다."
         : currentCountry === "NONE"
-          ? "국가 공휴일 표시가 꺼져 있습니다. (커스텀 휴일은 계속 표시됩니다)"
+          ? s.lang === "en"
+            ? "Country holidays disabled (custom holidays remain active)."
+            : "국가 공휴일 표시가 꺼져 있습니다. (커스텀 휴일은 계속 표시됩니다)"
           : cachedYears.length > 0
-            ? `Nager.Date 무료 API에서 받아온 로컬 캐시 사용 중 (캐시된 연도: ${cachedYears.join(", ")}) — 이후 오프라인 동작`
-            : "해외 국가 선택 시 무료 API(date.nager.at)에서 해당 국가 공휴일만 1회 다운로드해 로컬 캐싱합니다.";
+            ? s.lang === "en"
+              ? `Using local cache from Nager.Date (cached years: ${cachedYears.join(", ")}) — works offline.`
+              : `Nager.Date 무료 API에서 받아온 로컬 캐시 사용 중 (캐시된 연도: ${cachedYears.join(", ")}) — 이후 오프라인 동작`
+            : s.lang === "en"
+              ? "Fetches holidays once from date.nager.at and caches locally for offline use."
+              : "해외 국가 선택 시 무료 API(date.nager.at)에서 해당 국가 공휴일만 1회 다운로드해 로컬 캐싱합니다.";
 
     new Setting(containerEl)
-      .setName("공휴일 국가 선택")
+      .setName(s.settingCountryName)
       .setDesc(countryDesc)
       .addDropdown((dd) => {
         const hasCurrent = this.plugin.availableCountries.some(
@@ -124,27 +149,26 @@ export class CalendarMemoSettingTab extends PluginSettingTab {
       })
       .addButton((btn) =>
         btn
-          .setButtonText("전체 국가(110+) 불러오기")
-          .setTooltip("Nager.Date에서 지원하는 전 세계 110개국 이상 목록을 가져옵니다.")
+          .setButtonText(s.settingLoadAllCountries)
           .onClick(async () => {
             btn.setDisabled(true);
-            btn.setButtonText("불러오는 중...");
+            btn.setButtonText("...");
             try {
               const list = await this.plugin.loadAllCountriesFromNager();
-              new Notice(`${list.length - 2}개 국가 목록을 불러왔습니다.`);
+              new Notice(`${list.length - 2} countries loaded.`);
               this.display();
             } catch {
-              new Notice("전체 국가 목록을 불러오지 못했습니다. 인터넷 연결을 확인하세요.");
+              new Notice("Failed to load country list.");
               btn.setDisabled(false);
-              btn.setButtonText("전체 국가(110+) 불러오기");
+              btn.setButtonText(s.settingLoadAllCountries);
             }
           })
       );
 
     if (currentCountry !== "KR" && currentCountry !== "NONE") {
       new Setting(containerEl)
-        .setName("해외 공휴일 현지어 이름 사용")
-        .setDesc("켜면 현지어(예: 元日), 끄면 영문명(예: New Year's Day)으로 표시합니다.")
+        .setName(s.settingLocalHolidayName)
+        .setDesc(s.settingLocalHolidayDesc)
         .addToggle((tg) =>
           tg
             .setValue(this.plugin.settings.useLocalHolidayName)
@@ -157,10 +181,9 @@ export class CalendarMemoSettingTab extends PluginSettingTab {
         );
 
       new Setting(containerEl)
-        .setName(`${currentCountry} 공휴일 캐시 관리`)
-        .setDesc("최신 연도 공휴일을 다시 받아오거나 저장된 캐시를 비울 수 있습니다.")
+        .setName(s.settingCacheManage(currentCountry))
         .addButton((btn) =>
-          btn.setButtonText("지금 다시 동기화").onClick(async () => {
+          btn.setButtonText(s.settingResyncBtn).onClick(async () => {
             const yr = new Date().getFullYear();
             await this.plugin.syncCountryHolidayYears(
               currentCountry,
@@ -173,27 +196,24 @@ export class CalendarMemoSettingTab extends PluginSettingTab {
         )
         .addButton((btn) =>
           btn
-            .setButtonText("캐시 비우기")
+            .setButtonText(s.settingClearCacheBtn)
             .setWarning()
             .onClick(async () => {
               await this.plugin.clearCountryHolidayCache(currentCountry);
-              new Notice(`${currentCountry} 공휴일 캐시를 비웠습니다.`);
               this.display();
             })
         );
     }
 
     // 폴더 탭 관리 섹션
-    containerEl.createEl("h3", { text: "캘린더 폴더 탭" });
+    containerEl.createEl("h3", { text: s.settingTabsSection });
 
     for (const tab of this.plugin.settings.tabs) {
       new Setting(containerEl)
         .setName(tab.name)
-        .setDesc(
-          `폴더: ${tab.folderPath || "(볼트 루트)"} · 파일 포맷: ${tab.dateFormat}`
-        )
+        .setDesc(`${tab.folderPath || "(root)"} · ${tab.dateFormat}`)
         .addButton((btn) =>
-          btn.setButtonText("편집").onClick(() => {
+          btn.setButtonText(s.settingEditBtn).onClick(() => {
             new TabConfigModal(
               this.plugin,
               tab,
@@ -217,11 +237,11 @@ export class CalendarMemoSettingTab extends PluginSettingTab {
     }
 
     new Setting(containerEl)
-      .setName("새 폴더 탭 추가")
-      .setDesc("다른 폴더의 날짜 노트들을 별도 탭으로 전환해 볼 수 있습니다.")
+      .setName(s.settingAddTabName)
+      .setDesc(s.settingAddTabDesc)
       .addButton((btn) =>
         btn
-          .setButtonText("폴더 탭 추가")
+          .setButtonText(s.settingAddTabBtn)
           .setCta()
           .onClick(() => {
             new TabConfigModal(this.plugin, null, async (created) => {
@@ -235,15 +255,13 @@ export class CalendarMemoSettingTab extends PluginSettingTab {
       );
 
     // 반복 일정 & 커스텀 휴일 바로가기
-    containerEl.createEl("h3", { text: "반복 일정 및 커스텀 휴일" });
+    containerEl.createEl("h3", { text: s.settingRecurringSection });
 
     new Setting(containerEl)
-      .setName("반복 일정 관리")
-      .setDesc(
-        `현재 ${this.plugin.settings.recurringEvents.length}개의 반복 일정이 등록되어 있습니다.`
-      )
+      .setName(s.modalRecurringTitle)
+      .setDesc(`(${this.plugin.settings.recurringEvents.length})`)
       .addButton((btn) =>
-        btn.setButtonText("열기").onClick(() => {
+        btn.setButtonText(s.settingOpenBtn).onClick(() => {
           new RecurringEventsModal(
             this.plugin,
             this.plugin.settings.activeTabId,
@@ -257,12 +275,10 @@ export class CalendarMemoSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("커스텀 휴일 · 기념일 관리")
-      .setDesc(
-        `현재 ${this.plugin.settings.customHolidays.length}개의 커스텀 항목이 등록되어 있습니다.`
-      )
+      .setName(s.modalHolidayTitle)
+      .setDesc(`(${this.plugin.settings.customHolidays.length})`)
       .addButton((btn) =>
-        btn.setButtonText("열기").onClick(() => {
+        btn.setButtonText(s.settingOpenBtn).onClick(() => {
           new CustomHolidaysModal(this.plugin, () => {
             this.plugin.refreshAllViews();
             this.display();

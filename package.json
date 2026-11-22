@@ -1,6 +1,6 @@
 {
   "name": "calendar-memo",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Memoit-style infinite scrolling calendar memo plugin for Obsidian with native Live Preview popover editor",
   "main": "main.js",
   "scripts": {

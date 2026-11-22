@@ -1,6 +1,7 @@
 import {
   App,
   MarkdownView,
+  Notice,
   Platform,
   Scope,
   WorkspaceLeaf,
@@ -9,6 +10,7 @@ import {
 import { Prec } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import {
+  CELL_COLOR_PRESETS,
   CalendarTab,
   DateKey,
   DayCalendarMeta,
@@ -16,6 +18,7 @@ import {
   PopoverSizeConfig,
   PopoverSizePreset,
 } from "../types";
+import { UiStrings } from "../i18n";
 import { VaultSyncManager } from "../storage/vaultSync";
 import { getDayOfWeek, parseDateKey } from "../calendar/dateUtils";
 
@@ -144,10 +147,15 @@ export interface PopoverOpenOptions {
   app: App;
   vaultSync: VaultSyncManager;
   tab: CalendarTab;
+  allTabs?: CalendarTab[];
+  tabsWithMemo?: Set<string>;
   dateKey: DateKey;
   meta: DayCalendarMeta;
   anchorRect: DOMRect;
   initialSize: PopoverSizeConfig;
+  strings: UiStrings;
+  showTabBadge?: boolean;
+  onSwitchToMultiCalendar?: () => void;
   onSizeChange: (size: PopoverSizeConfig) => void;
   onClosed: (dateKey: DateKey, finalContent: string) => void;
 }
@@ -160,12 +168,19 @@ export class CalendarPopoverEditor {
   private app: App;
   private vaultSync: VaultSyncManager;
   private tab: CalendarTab;
+  private allTabs: CalendarTab[];
+  private tabsWithMemo: Set<string>;
   private dateKey: DateKey;
   private currentSize: PopoverSizeConfig;
+  private strings: UiStrings;
+  private showTabBadge: boolean;
+  private onSwitchToMultiCalendar?: () => void;
   private onSizeChange: (size: PopoverSizeConfig) => void;
   private onClosed: (dateKey: DateKey, finalContent: string) => void;
 
   private popoverEl: HTMLElement | null = null;
+  private tabSelectorBarEl: HTMLElement | null = null;
+  private editorHostEl: HTMLElement | null = null;
   private sizeButtons = new Map<
     Exclude<PopoverSizePreset, "custom">,
     HTMLButtonElement
@@ -195,8 +210,13 @@ export class CalendarPopoverEditor {
     this.app = options.app;
     this.vaultSync = options.vaultSync;
     this.tab = options.tab;
+    this.allTabs = options.allTabs ?? [options.tab];
+    this.tabsWithMemo = options.tabsWithMemo ?? new Set();
     this.dateKey = options.dateKey;
     this.currentSize = { ...options.initialSize };
+    this.strings = options.strings;
+    this.showTabBadge = Boolean(options.showTabBadge);
+    this.onSwitchToMultiCalendar = options.onSwitchToMultiCalendar;
     this.onSizeChange = options.onSizeChange;
     this.onClosed = options.onClosed;
     void this.open(options.meta, options.anchorRect);
@@ -220,8 +240,16 @@ export class CalendarPopoverEditor {
 
     this.positionPopover(popoverEl, anchorRect);
     this.renderHeader(popoverEl, meta);
+    // [ID 6.8.1] 전체 보기 모드에서 단일 셀 편집 시 대상 달력 선택 및 '동시 입력' 전환 바 표시
+    if (this.showTabBadge && this.allTabs.length > 1) {
+      this.tabSelectorBarEl = popoverEl.createDiv({ cls: "cm-popover-tab-bar" });
+      this.renderPopoverTabSelector();
+    }
+    // [ID 6.7] 팝오버 빠른 서식/삽입 툴바 (체크박스, 글머리, 시간, 이모지 하이라이트, 링크, 구분선)
+    this.renderFormattingToolbar(popoverEl);
 
     const editorHost = popoverEl.createDiv({ cls: "cm-popover-editor-host" });
+    this.editorHostEl = editorHost;
     const mounted = await this.mountEditor(editorHost);
     if (!mounted) {
       this.mountTextareaFallback(editorHost);
@@ -512,18 +540,26 @@ export class CalendarPopoverEditor {
   }
 
   private renderHeader(popoverEl: HTMLElement, meta: DayCalendarMeta): void {
+    const s = this.strings;
     const header = popoverEl.createDiv({ cls: "cm-popover-header" });
     this.attachHeaderDrag(header);
     const titleWrap = header.createDiv({ cls: "cm-popover-title-wrap" });
 
     const { year, month, day } = parseDateKey(this.dateKey);
-    const dow = WEEKDAY_KR[getDayOfWeek(this.dateKey)];
+    const dow = getDayOfWeek(this.dateKey);
     const titleEl = titleWrap.createSpan({
       cls: "cm-popover-date-title",
-      text: `${year}년 ${month}월 ${day}일 (${dow})`,
+      text: s.formatPopoverDate(year, month, day, dow),
     });
     if (meta.isHoliday) {
       titleEl.addClass("is-holiday");
+    }
+
+    if (this.showTabBadge) {
+      titleWrap.createSpan({
+        cls: "cm-popover-tab-badge",
+        text: this.tab.name,
+      });
     }
 
     if (meta.holidayNames.length > 0) {
@@ -534,7 +570,7 @@ export class CalendarPopoverEditor {
     } else if (meta.lunarLabel) {
       titleWrap.createSpan({
         cls: "cm-popover-lunar-badge",
-        text: `음 ${meta.lunarLabel}`,
+        text: s.lang === "ko" ? `음 ${meta.lunarLabel}` : `Lunar ${meta.lunarLabel}`,
       });
     }
 
@@ -543,38 +579,40 @@ export class CalendarPopoverEditor {
     // [ID 6.6] 소 / 중 / 대 크기 프리셋 전환 버튼 그룹
     const sizeGroup = actions.createDiv({
       cls: "cm-popover-size-group",
-      attr: { title: "편집창 크기 프리셋 (테두리 드래그로 자유 조절 가능)" },
     });
     this.sizeButtons.clear();
-    const presets: Array<Exclude<PopoverSizePreset, "custom">> = [
-      "small",
-      "medium",
-      "large",
+    const presets: Array<{
+      key: Exclude<PopoverSizePreset, "custom">;
+      label: string;
+    }> = [
+      { key: "small", label: s.sizeSmall },
+      { key: "medium", label: s.sizeMedium },
+      { key: "large", label: s.sizeLarge },
     ];
-    for (const presetKey of presets) {
-      const cfg = POPOVER_SIZE_PRESETS[presetKey];
+    for (const p of presets) {
+      const cfg = POPOVER_SIZE_PRESETS[p.key];
       const btn = sizeGroup.createEl("button", {
         cls: "clickable-icon cm-popover-size-btn",
-        text: cfg.label,
+        text: p.label,
         attr: {
           type: "button",
-          "aria-label": `편집창 크기: ${cfg.label} (${cfg.width}x${cfg.height})`,
+          "aria-label": `${p.label} (${cfg.width}x${cfg.height})`,
         },
       });
       btn.addEventListener("click", (e) => {
         e.stopPropagation();
-        this.applySizePreset(presetKey);
+        this.applySizePreset(p.key);
       });
-      this.sizeButtons.set(presetKey, btn);
+      this.sizeButtons.set(p.key, btn);
     }
     this.updateSizePresetButtons();
 
-    const hintText = Platform.isMacOS ? "⌘+Enter 저장" : "Ctrl+Enter 저장";
+    const hintText = Platform.isMacOS ? s.saveHintMac : s.saveHintWin;
     actions.createSpan({ cls: "cm-popover-hint", text: hintText });
 
     const openFileBtn = actions.createEl("button", {
       cls: "cm-icon-btn",
-      attr: { "aria-label": "노트 탭으로 열기", type: "button" },
+      attr: { "aria-label": s.openInTabAria, type: "button" },
     });
     setIcon(openFileBtn, "external-link");
     openFileBtn.addEventListener("click", async () => {
@@ -596,10 +634,385 @@ export class CalendarPopoverEditor {
 
     const closeBtn = actions.createEl("button", {
       cls: "cm-icon-btn",
-      attr: { "aria-label": "저장 후 닫기", type: "button" },
+      attr: { "aria-label": s.saveCloseAria, type: "button" },
     });
     setIcon(closeBtn, "x");
     closeBtn.addEventListener("click", () => void this.close());
+  }
+
+  /**
+   * [ID 6.8.1] 전체 보기 모드 팝오버 내 대상 달력 전환 바 + '여러 달력 동시 입력' 버튼
+   * -> 전체 보기에서 어느 달력에 기록되는지 명확히 선택하고, 필요 시 여러 달력 동시 입력으로 즉시 전환함.
+   */
+  private renderPopoverTabSelector(): void {
+    if (!this.tabSelectorBarEl) return;
+    const s = this.strings;
+    this.tabSelectorBarEl.empty();
+
+    const chipsWrap = this.tabSelectorBarEl.createDiv({
+      cls: "cm-popover-tab-chips",
+    });
+
+    this.allTabs.forEach((tab, idx) => {
+      const isCurrent = tab.id === this.tab.id;
+      const hasNote = this.tabsWithMemo.has(tab.id);
+      const chip = chipsWrap.createEl("button", {
+        cls: `clickable-icon cm-target-tab-chip cm-tab-color-${idx % 6} ${
+          isCurrent ? "is-active" : ""
+        }`,
+        attr: { type: "button", title: tab.folderPath || "(root)" },
+      });
+      if (hasNote) {
+        chip.createSpan({ cls: "cm-chip-has-memo-dot" });
+      }
+      chip.createSpan({ text: tab.name });
+      chip.addEventListener("mousedown", (e) => e.preventDefault());
+      chip.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (tab.id !== this.tab.id) {
+          void this.switchEditorTargetTab(tab);
+        }
+      });
+    });
+
+    if (this.onSwitchToMultiCalendar) {
+      const multiBtn = this.tabSelectorBarEl.createEl("button", {
+        cls: "clickable-icon cm-popover-multi-btn",
+        attr: {
+          type: "button",
+          title: s.batchMultiCalendarTip,
+          "aria-label": s.batchMultiCalendarTip,
+        },
+      });
+      setIcon(multiBtn.createSpan({ cls: "cm-fmt-icon" }), "layers");
+      multiBtn.createSpan({ text: s.batchMultiCalendarBtn });
+      multiBtn.addEventListener("mousedown", (e) => e.preventDefault());
+      multiBtn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        const switchFn = this.onSwitchToMultiCalendar;
+        await this.close();
+        switchFn?.();
+      });
+    }
+  }
+
+  private async switchEditorTargetTab(nextTab: CalendarTab): Promise<void> {
+    if (!this.isOpen || nextTab.id === this.tab.id) return;
+
+    if (this.saveTimer !== null) {
+      window.clearTimeout(this.saveTimer);
+      this.saveTimer = null;
+    }
+
+    // 현재 탭의 수정 사항을 먼저 안전하게 저장
+    const currentText = this.getCurrentContent();
+    if (this.dirty || currentText !== this.initialContent) {
+      await this.vaultSync.writeMemo(this.tab, this.dateKey, currentText);
+      if (currentText.trim().length > 0) {
+        this.tabsWithMemo.add(this.tab.id);
+      } else {
+        this.tabsWithMemo.delete(this.tab.id);
+      }
+    }
+
+    this.tab = nextTab;
+    this.initialContent = await this.vaultSync.readMemo(nextTab, this.dateKey);
+    this.dirty = false;
+
+    // 헤더의 탭 배지도 함께 갱신
+    const headerBadge = this.popoverEl?.querySelector(".cm-popover-tab-badge");
+    if (headerBadge) {
+      headerBadge.textContent = nextTab.name;
+    }
+    this.renderPopoverTabSelector();
+
+    // 네이티브 에디터가 활성 중이면 새 탭 내용으로 즉시 교체
+    if (this.nativeEditor) {
+      const setter = (
+        this.nativeEditor as unknown as { set?: (val: string) => void }
+      ).set;
+      setter?.call(this.nativeEditor, this.initialContent);
+      window.requestAnimationFrame(() => {
+        const cm = this.nativeEditor?.cm;
+        if (cm) {
+          cm.focus();
+          const len = cm.state.doc.length;
+          cm.dispatch({ selection: { anchor: len } });
+        }
+      });
+    } else if (this.fallbackLeaf && this.editorHostEl) {
+      try {
+        this.fallbackLeaf.detach();
+      } catch {
+        // ignore
+      }
+      this.fallbackLeaf = null;
+      this.editorHostEl.empty();
+      const mounted = await this.mountEditor(this.editorHostEl);
+      if (!mounted) this.mountTextareaFallback(this.editorHostEl);
+    } else if (this.fallbackTextarea) {
+      this.fallbackTextarea.value = this.initialContent;
+      this.fallbackTextarea.focus();
+    }
+  }
+
+  /**
+   * [ID 6.7] 캘린더 메모용 경량 서식 툴바
+   * -> mousedown에서 preventDefault()를 호출해 버튼 클릭 시 에디터 포커스와 선택 영역이 풀리지 않도록 유지함.
+   */
+  private renderFormattingToolbar(popoverEl: HTMLElement): void {
+    const s = this.strings;
+    const bar = popoverEl.createDiv({ cls: "cm-popover-toolbar" });
+
+    const makeBtn = (
+      iconName: string,
+      label: string,
+      tooltip: string,
+      onClick: () => void,
+      showLabel = false
+    ) => {
+      const btn = bar.createEl("button", {
+        cls: `clickable-icon cm-fmt-btn ${showLabel ? "has-label" : ""}`,
+        attr: { type: "button", "aria-label": tooltip, title: tooltip },
+      });
+      setIcon(btn.createSpan({ cls: "cm-fmt-icon" }), iconName);
+      if (showLabel) {
+        btn.createSpan({ text: label });
+      }
+      btn.addEventListener("mousedown", (e) => e.preventDefault());
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        onClick();
+      });
+      return btn;
+    };
+
+    makeBtn(
+      "check-square",
+      s.fmtTask,
+      s.fmtTaskTip,
+      () => this.toggleCheckboxOnCurrentLines(),
+      true
+    );
+
+    makeBtn("list", "", s.fmtBulletTip, () => this.toggleBulletOnCurrentLines());
+
+    makeBtn("clock", "", s.fmtTimeTip, () => {
+      const now = new Date();
+      const hh = String(now.getHours()).padStart(2, "0");
+      const mm = String(now.getMinutes()).padStart(2, "0");
+      this.insertTextAtCursor(`${hh}:${mm} `);
+    });
+
+    makeBtn("link", "", s.fmtLinkTip, () => {
+      this.insertTextAtCursor("[[]]", 2);
+    });
+
+    makeBtn("minus", "", s.fmtDividerTip, () => {
+      this.insertTextAtCursor("\n---\n");
+    });
+
+    bar.createDiv({ cls: "cm-fmt-divider" });
+
+    // 이모지 접두어 하이라이트 빠른 감싸기 (노랑 기본 + 파랑/주황/초록/빨강)
+    const hlGroup = bar.createDiv({
+      cls: "cm-fmt-hl-group",
+      attr: { title: s.fmtHighlightTip },
+    });
+    const hlPresets: Array<{ emoji: string; cls: string; label: string }> = [
+      { emoji: "", cls: "cm-swatch-yellow", label: "==" },
+      { emoji: "🔵", cls: "cm-swatch-blue", label: "==🔵==" },
+      { emoji: "🟠", cls: "cm-swatch-amber", label: "==🟠==" },
+      { emoji: "🟢", cls: "cm-swatch-green", label: "==🟢==" },
+      { emoji: "🔴", cls: "cm-swatch-rose", label: "==🔴==" },
+    ];
+    for (const preset of hlPresets) {
+      const dot = hlGroup.createEl("button", {
+        cls: `clickable-icon cm-fmt-hl-dot ${preset.cls}`,
+        attr: { type: "button", "aria-label": preset.label, title: preset.label },
+      });
+      dot.addEventListener("mousedown", (e) => e.preventDefault());
+      dot.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.wrapSelectionWithHighlight(preset.emoji);
+      });
+    }
+  }
+
+  private getActiveCodeMirror(): EditorView | null {
+    if (this.nativeEditor?.cm) return this.nativeEditor.cm;
+    if (this.fallbackLeaf && this.fallbackLeaf.view instanceof MarkdownView) {
+      const cm = (this.fallbackLeaf.view.editor as unknown as { cm?: EditorView })
+        .cm;
+      if (cm) return cm;
+    }
+    return null;
+  }
+
+  private toggleCheckboxOnCurrentLines(): void {
+    const cm = this.getActiveCodeMirror();
+    if (cm) {
+      const { state } = cm;
+      const sel = state.selection.main;
+      const startLine = state.doc.lineAt(sel.from);
+      const endLine = state.doc.lineAt(sel.to);
+      const changes: Array<{ from: number; to: number; insert: string }> = [];
+
+      for (let ln = startLine.number; ln <= endLine.number; ln++) {
+        const line = state.doc.line(ln);
+        const text = line.text;
+        const uncheckedMatch = text.match(/^([ \t]*)- \[ \] (.*)$/);
+        const checkedMatch = text.match(/^([ \t]*)- \[[xX]\] (.*)$/);
+        const bulletMatch = text.match(/^([ \t]*)[-*+] (.*)$/);
+
+        let nextText: string;
+        if (uncheckedMatch) {
+          nextText = `${uncheckedMatch[1]}- [x] ${uncheckedMatch[2]}`;
+        } else if (checkedMatch) {
+          nextText = `${checkedMatch[1]}${checkedMatch[2]}`;
+        } else if (bulletMatch) {
+          nextText = `${bulletMatch[1]}- [ ] ${bulletMatch[2]}`;
+        } else {
+          const indentMatch = text.match(/^([ \t]*)(.*)$/);
+          const indent = indentMatch ? indentMatch[1] : "";
+          const rest = indentMatch ? indentMatch[2] : text;
+          nextText = `${indent}- [ ] ${rest}`;
+        }
+        changes.push({ from: line.from, to: line.to, insert: nextText });
+      }
+
+      const lastChange = changes[changes.length - 1];
+      const delta =
+        lastChange.insert.length - (lastChange.to - lastChange.from);
+      const nextCursor =
+        startLine.number === endLine.number
+          ? Math.max(startLine.from, sel.to + delta)
+          : lastChange.from + lastChange.insert.length;
+
+      cm.dispatch({
+        changes,
+        selection: { anchor: nextCursor },
+      });
+      cm.focus();
+      this.dirty = true;
+      this.scheduleDebouncedSave();
+      return;
+    }
+
+    if (this.fallbackTextarea) {
+      this.insertIntoTextarea("- [ ] ", 0);
+    }
+  }
+
+  private toggleBulletOnCurrentLines(): void {
+    const cm = this.getActiveCodeMirror();
+    if (cm) {
+      const { state } = cm;
+      const sel = state.selection.main;
+      const startLine = state.doc.lineAt(sel.from);
+      const endLine = state.doc.lineAt(sel.to);
+      const changes: Array<{ from: number; to: number; insert: string }> = [];
+
+      for (let ln = startLine.number; ln <= endLine.number; ln++) {
+        const line = state.doc.line(ln);
+        const text = line.text;
+        const bulletMatch = text.match(/^([ \t]*)- (.*)$/);
+        const nextText = bulletMatch
+          ? `${bulletMatch[1]}${bulletMatch[2]}`
+          : text.replace(/^([ \t]*)/, "$1- ");
+        changes.push({ from: line.from, to: line.to, insert: nextText });
+      }
+
+      const lastChange = changes[changes.length - 1];
+      const delta =
+        lastChange.insert.length - (lastChange.to - lastChange.from);
+      const nextCursor =
+        startLine.number === endLine.number
+          ? Math.max(startLine.from, sel.to + delta)
+          : lastChange.from + lastChange.insert.length;
+
+      cm.dispatch({
+        changes,
+        selection: { anchor: nextCursor },
+      });
+      cm.focus();
+      this.dirty = true;
+      this.scheduleDebouncedSave();
+      return;
+    }
+
+    if (this.fallbackTextarea) {
+      this.insertIntoTextarea("- ", 0);
+    }
+  }
+
+  private insertTextAtCursor(text: string, cursorBackOffset = 0): void {
+    const cm = this.getActiveCodeMirror();
+    if (cm) {
+      const sel = cm.state.selection.main;
+      const nextPos = sel.from + text.length - cursorBackOffset;
+      cm.dispatch({
+        changes: { from: sel.from, to: sel.to, insert: text },
+        selection: { anchor: nextPos },
+      });
+      cm.focus();
+      this.dirty = true;
+      this.scheduleDebouncedSave();
+      return;
+    }
+
+    if (this.fallbackTextarea) {
+      this.insertIntoTextarea(text, cursorBackOffset);
+    }
+  }
+
+  private wrapSelectionWithHighlight(emoji: string): void {
+    const open = `==${emoji}`;
+    const close = "==";
+    const cm = this.getActiveCodeMirror();
+    if (cm) {
+      const sel = cm.state.selection.main;
+      const selectedText = cm.state.sliceDoc(sel.from, sel.to);
+      const insert = `${open}${selectedText}${close}`;
+      const cursorPos = selectedText
+        ? sel.from + insert.length
+        : sel.from + open.length;
+      cm.dispatch({
+        changes: { from: sel.from, to: sel.to, insert },
+        selection: { anchor: cursorPos },
+      });
+      cm.focus();
+      this.dirty = true;
+      this.scheduleDebouncedSave();
+      return;
+    }
+
+    if (this.fallbackTextarea) {
+      const ta = this.fallbackTextarea;
+      const start = ta.selectionStart;
+      const end = ta.selectionEnd;
+      const selected = ta.value.slice(start, end);
+      const insert = `${open}${selected}${close}`;
+      ta.value = ta.value.slice(0, start) + insert + ta.value.slice(end);
+      const pos = selected ? start + insert.length : start + open.length;
+      ta.setSelectionRange(pos, pos);
+      ta.focus();
+      this.dirty = true;
+      this.scheduleDebouncedSave();
+    }
+  }
+
+  private insertIntoTextarea(text: string, cursorBackOffset: number): void {
+    const ta = this.fallbackTextarea;
+    if (!ta) return;
+    const start = ta.selectionStart;
+    const end = ta.selectionEnd;
+    ta.value = ta.value.slice(0, start) + text + ta.value.slice(end);
+    const pos = start + text.length - cursorBackOffset;
+    ta.setSelectionRange(pos, pos);
+    ta.focus();
+    this.dirty = true;
+    this.scheduleDebouncedSave();
   }
 
   private async mountEditor(hostEl: HTMLElement): Promise<boolean> {
@@ -861,5 +1274,591 @@ export class CalendarPopoverEditor {
     }
 
     this.onClosed(this.dateKey, finalContent);
+  }
+}
+
+// ============================================================================
+// [ID 6.8] 다중 날짜 선택 후 Enter -> 공통 문구·배경색 일괄 입력 팝오버
+// -> 체크박스·서식 툴바와 배경색 팔레트를 함께 제공하며, Cmd/Ctrl+Enter 또는 '적용' 클릭 시에만
+//    선택된 모든 날짜에 일괄 반영하고, 창 바깥 클릭이나 ESC 시에는 변경 없이 즉시 닫힘.
+// ============================================================================
+export interface BatchPopoverResult {
+  content: string;
+  colorAction: "keep" | "set";
+  colorId: string;
+  targetTabIds: string[];
+}
+
+export interface BatchPopoverOptions {
+  app: App;
+  dateKeys: DateKey[];
+  tabs: CalendarTab[];
+  initialSelectedTabIds: string[];
+  anchorRect: DOMRect;
+  strings: UiStrings;
+  onApply: (result: BatchPopoverResult) => void;
+  onCancel: () => void;
+}
+
+export class CalendarBatchPopover {
+  private app: App;
+  private dateKeys: DateKey[];
+  private tabs: CalendarTab[];
+  private selectedTabIds: Set<string>;
+  private strings: UiStrings;
+  private onApply: (result: BatchPopoverResult) => void;
+  private onCancel: () => void;
+
+  private popoverEl: HTMLElement | null = null;
+  private applyBtnEl: HTMLButtonElement | null = null;
+  private isOpen = false;
+  private isClosing = false;
+  private colorAction: "keep" | "set" = "keep";
+  private selectedColorId = "";
+
+  private nativeEditor: {
+    get(): string;
+    destroy(): void;
+    cm?: EditorView;
+  } | null = null;
+  private fallbackTextarea: HTMLTextAreaElement | null = null;
+
+  private scope: Scope | null = null;
+  private outsidePointerHandler: ((e: PointerEvent) => void) | null = null;
+  private keydownCaptureHandler: ((e: KeyboardEvent) => void) | null = null;
+
+  constructor(options: BatchPopoverOptions) {
+    this.app = options.app;
+    this.dateKeys = [...options.dateKeys].sort();
+    this.tabs = options.tabs;
+    this.selectedTabIds = new Set(
+      options.initialSelectedTabIds.length > 0
+        ? options.initialSelectedTabIds
+        : options.tabs[0]
+          ? [options.tabs[0].id]
+          : []
+    );
+    this.strings = options.strings;
+    this.onApply = options.onApply;
+    this.onCancel = options.onCancel;
+    this.open(options.anchorRect);
+  }
+
+  isActive(): boolean {
+    return this.isOpen;
+  }
+
+  private open(anchorRect: DOMRect): void {
+    this.isOpen = true;
+    const s = this.strings;
+    const popoverEl = document.body.createDiv({
+      cls: "cm-popover cm-batch-popover",
+    });
+    this.popoverEl = popoverEl;
+
+    // 위치 계산 (화면 중앙/앵커 근처에 넉넉하게 배치)
+    const margin = POPOVER_VIEWPORT_MARGIN;
+    const width = Math.min(460, window.innerWidth - margin * 2);
+    const height = Math.min(360, window.innerHeight - margin * 2);
+    let left = anchorRect.left - (width - anchorRect.width) / 2;
+    let top = anchorRect.top - (height - anchorRect.height) / 2;
+    left = Math.max(margin, Math.min(left, window.innerWidth - width - margin));
+    top = Math.max(margin, Math.min(top, window.innerHeight - height - margin));
+    popoverEl.style.left = `${Math.round(left)}px`;
+    popoverEl.style.top = `${Math.round(top)}px`;
+    popoverEl.style.width = `${Math.round(width)}px`;
+    popoverEl.style.height = `${Math.round(height)}px`;
+
+    // 1) 헤더
+    const header = popoverEl.createDiv({ cls: "cm-popover-header" });
+    const titleWrap = header.createDiv({ cls: "cm-popover-title-wrap" });
+    titleWrap.createSpan({
+      cls: "cm-popover-date-title",
+      text: s.batchTitle(this.dateKeys.length),
+    });
+    if (this.dateKeys.length > 0) {
+      const first = this.dateKeys[0].slice(5).replace("-", "/");
+      const last = this.dateKeys[this.dateKeys.length - 1]
+        .slice(5)
+        .replace("-", "/");
+      titleWrap.createSpan({
+        cls: "cm-popover-lunar-badge",
+        text: this.dateKeys.length === 1 ? first : `${first} ~ ${last}`,
+      });
+    }
+    const closeBtn = header.createEl("button", {
+      cls: "cm-icon-btn",
+      attr: { "aria-label": s.closeAria, type: "button" },
+    });
+    setIcon(closeBtn, "x");
+    closeBtn.addEventListener("click", () => this.dismiss(false));
+
+    // 2) [ID 6.8.2] 대상 달력(캘린더) 다중 선택 바 (2개 이상 탭이 있을 때 표시)
+    if (this.tabs.length > 1) {
+      this.renderTargetCalendarsRow(popoverEl);
+    }
+
+    // 3) 서식 툴바 (체크박스, 글머리, 시간, 링크, 구분선, 하이라이트)
+    this.renderFormattingToolbar(popoverEl);
+
+    // 4) 배경색 선택 바 (배경색 유지 / 없음 / 8색)
+    this.renderColorPickerRow(popoverEl);
+
+    // 5) 네이티브 Live Preview 에디터 (또는 textarea 폴백)
+    const editorHost = popoverEl.createDiv({ cls: "cm-popover-editor-host" });
+    if (!this.mountNativeEditor(editorHost)) {
+      const ta = editorHost.createEl("textarea", {
+        cls: "cm-popover-textarea-fallback",
+        attr: { placeholder: s.batchPlaceholder },
+      });
+      this.fallbackTextarea = ta;
+      window.requestAnimationFrame(() => ta.focus());
+    }
+
+    // 6) 하단 액션 바
+    const footer = popoverEl.createDiv({ cls: "cm-batch-footer" });
+    footer.createSpan({
+      cls: "cm-popover-hint",
+      text: Platform.isMacOS ? s.applyHintMac : s.applyHintWin,
+    });
+    const btns = footer.createDiv({ cls: "cm-batch-footer-btns" });
+    const cancelBtn = btns.createEl("button", {
+      text: s.batchCancelBtn,
+      attr: { type: "button" },
+    });
+    cancelBtn.addEventListener("click", () => this.dismiss(false));
+
+    const applyBtn = btns.createEl("button", {
+      text: s.batchApplyBtn(this.dateKeys.length, this.selectedTabIds.size),
+      cls: "mod-cta",
+      attr: { type: "button" },
+    });
+    this.applyBtnEl = applyBtn;
+    applyBtn.addEventListener("click", () => this.dismiss(true));
+
+    // 6) 단축키 (Cmd/Ctrl+Enter 적용, ESC 취소) & 창 외부 클릭 시 즉시 사라짐
+    const scope = new Scope(this.app.scope);
+    scope.register(["Mod"], "Enter", (evt) => {
+      evt.preventDefault();
+      this.dismiss(true);
+      return false;
+    });
+    scope.register(["Ctrl"], "Enter", (evt) => {
+      evt.preventDefault();
+      this.dismiss(true);
+      return false;
+    });
+    scope.register([], "Escape", (evt) => {
+      if (hasOpenObsidianPopup()) return;
+      evt.preventDefault();
+      this.dismiss(false);
+      return false;
+    });
+    this.scope = scope;
+    this.app.keymap.pushScope(scope);
+
+    this.keydownCaptureHandler = (e: KeyboardEvent) => {
+      if (!this.isOpen) return;
+      const isEnter = e.key === "Enter" || e.code === "Enter";
+      if ((e.metaKey || e.ctrlKey) && isEnter) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        this.dismiss(true);
+        return;
+      }
+      if (e.key === "Escape" || e.code === "Escape") {
+        if (hasOpenObsidianPopup()) return;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        this.dismiss(false);
+      }
+    };
+    window.addEventListener("keydown", this.keydownCaptureHandler, true);
+
+    window.setTimeout(() => {
+      if (!this.isOpen) return;
+      this.outsidePointerHandler = (e: PointerEvent) => {
+        const target = e.target as HTMLElement | null;
+        if (!target || !this.popoverEl) return;
+        if (this.popoverEl.contains(target)) return;
+        if (
+          target.closest(
+            ".suggestion-container, .menu, .modal-container, .prompt"
+          )
+        ) {
+          return;
+        }
+        // 창 바깥 클릭 시 저장하지 않고 깔끔하게 편집창 닫기
+        this.dismiss(false);
+      };
+      document.addEventListener("pointerdown", this.outsidePointerHandler, true);
+    }, 0);
+  }
+
+  /**
+   * [ID 6.8.2] 공통 입력을 적용할 대상 캘린더(1개 또는 복수 선택) 토글 칩 바
+   */
+  private renderTargetCalendarsRow(popoverEl: HTMLElement): void {
+    const s = this.strings;
+    const row = popoverEl.createDiv({ cls: "cm-batch-tabs-row" });
+    row.createSpan({
+      cls: "cm-batch-row-label",
+      text: s.batchTargetCalendars,
+    });
+
+    const chipButtons = new Map<string, HTMLButtonElement>();
+    const allToggleBtn = row.createEl("button", {
+      cls: "clickable-icon cm-batch-all-cal-btn",
+      text: s.batchSelectAllCalendars,
+      attr: { type: "button" },
+    });
+
+    const syncUi = () => {
+      const allSelected = this.selectedTabIds.size === this.tabs.length;
+      allToggleBtn.toggleClass("is-active", allSelected);
+      for (const [id, btn] of chipButtons.entries()) {
+        btn.toggleClass("is-active", this.selectedTabIds.has(id));
+      }
+      if (this.applyBtnEl) {
+        this.applyBtnEl.textContent = s.batchApplyBtn(
+          this.dateKeys.length,
+          this.selectedTabIds.size
+        );
+        this.applyBtnEl.disabled = this.selectedTabIds.size === 0;
+      }
+    };
+
+    allToggleBtn.addEventListener("mousedown", (e) => e.preventDefault());
+    allToggleBtn.addEventListener("click", () => {
+      if (this.selectedTabIds.size === this.tabs.length) {
+        // 모두 선택 상태에서 다시 누르면 첫 번째 탭만 남김
+        this.selectedTabIds.clear();
+        if (this.tabs[0]) this.selectedTabIds.add(this.tabs[0].id);
+      } else {
+        this.tabs.forEach((t) => this.selectedTabIds.add(t.id));
+      }
+      syncUi();
+    });
+
+    this.tabs.forEach((tab, idx) => {
+      const chip = row.createEl("button", {
+        cls: `clickable-icon cm-target-tab-chip cm-tab-color-${idx % 6}`,
+        attr: { type: "button", title: tab.folderPath || "(root)" },
+      });
+      chip.createSpan({ cls: "cm-chip-check", text: "✓" });
+      chip.createSpan({ text: tab.name });
+      chip.addEventListener("mousedown", (e) => e.preventDefault());
+      chip.addEventListener("click", () => {
+        if (this.selectedTabIds.has(tab.id)) {
+          this.selectedTabIds.delete(tab.id);
+        } else {
+          this.selectedTabIds.add(tab.id);
+        }
+        syncUi();
+      });
+      chipButtons.set(tab.id, chip);
+    });
+
+    syncUi();
+  }
+
+  private renderColorPickerRow(popoverEl: HTMLElement): void {
+    const s = this.strings;
+    const row = popoverEl.createDiv({ cls: "cm-batch-color-row" });
+    const buttons: HTMLElement[] = [];
+
+    const updateActive = () => {
+      buttons.forEach((btn) => btn.removeClass("is-active"));
+      if (this.colorAction === "keep") {
+        keepBtn.addClass("is-active");
+      } else {
+        const activeSwatch = row.querySelector(
+          `[data-color-id="${this.selectedColorId}"]`
+        );
+        activeSwatch?.addClass("is-active");
+      }
+    };
+
+    const keepBtn = row.createEl("button", {
+      cls: "clickable-icon cm-batch-keep-btn is-active",
+      text: s.batchColorKeep,
+      attr: { type: "button" },
+    });
+    keepBtn.addEventListener("mousedown", (e) => e.preventDefault());
+    keepBtn.addEventListener("click", () => {
+      this.colorAction = "keep";
+      this.selectedColorId = "";
+      updateActive();
+    });
+    buttons.push(keepBtn);
+
+    for (const preset of CELL_COLOR_PRESETS) {
+      const label = s.colorLabels[preset.id] ?? preset.label;
+      const swatch = row.createEl("button", {
+        cls: `clickable-icon cm-color-swatch ${
+          preset.id === "" ? "is-clear" : `cm-swatch-${preset.id}`
+        }`,
+        attr: {
+          type: "button",
+          "data-color-id": preset.id,
+          title: label,
+          "aria-label": label,
+        },
+      });
+      if (preset.id === "") {
+        setIcon(swatch, "ban");
+      } else {
+        swatch.style.backgroundColor = preset.swatch;
+      }
+      swatch.addEventListener("mousedown", (e) => e.preventDefault());
+      swatch.addEventListener("click", () => {
+        this.colorAction = "set";
+        this.selectedColorId = preset.id;
+        updateActive();
+      });
+      buttons.push(swatch);
+    }
+  }
+
+  private renderFormattingToolbar(popoverEl: HTMLElement): void {
+    const s = this.strings;
+    const bar = popoverEl.createDiv({ cls: "cm-popover-toolbar" });
+
+    const makeBtn = (
+      iconName: string,
+      label: string,
+      tooltip: string,
+      onClick: () => void,
+      showLabel = false
+    ) => {
+      const btn = bar.createEl("button", {
+        cls: `clickable-icon cm-fmt-btn ${showLabel ? "has-label" : ""}`,
+        attr: { type: "button", "aria-label": tooltip, title: tooltip },
+      });
+      setIcon(btn.createSpan({ cls: "cm-fmt-icon" }), iconName);
+      if (showLabel) btn.createSpan({ text: label });
+      btn.addEventListener("mousedown", (e) => e.preventDefault());
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        onClick();
+      });
+    };
+
+    makeBtn(
+      "check-square",
+      s.fmtTask,
+      s.fmtTaskTip,
+      () => this.togglePrefix("- [ ] "),
+      true
+    );
+    makeBtn("list", "", s.fmtBulletTip, () => this.togglePrefix("- "));
+    makeBtn("clock", "", s.fmtTimeTip, () => {
+      const now = new Date();
+      const hh = String(now.getHours()).padStart(2, "0");
+      const mm = String(now.getMinutes()).padStart(2, "0");
+      this.insertText(`${hh}:${mm} `, 0);
+    });
+    makeBtn("link", "", s.fmtLinkTip, () => this.insertText("[[]]", 2));
+    makeBtn("minus", "", s.fmtDividerTip, () => this.insertText("\n---\n", 0));
+
+    bar.createDiv({ cls: "cm-fmt-divider" });
+    const hlGroup = bar.createDiv({ cls: "cm-fmt-hl-group" });
+    const hlPresets: Array<{ emoji: string; cls: string }> = [
+      { emoji: "", cls: "cm-swatch-yellow" },
+      { emoji: "🔵", cls: "cm-swatch-blue" },
+      { emoji: "🟠", cls: "cm-swatch-amber" },
+      { emoji: "🟢", cls: "cm-swatch-green" },
+      { emoji: "🔴", cls: "cm-swatch-rose" },
+    ];
+    for (const p of hlPresets) {
+      const dot = hlGroup.createEl("button", {
+        cls: `clickable-icon cm-fmt-hl-dot ${p.cls}`,
+        attr: { type: "button" },
+      });
+      dot.addEventListener("mousedown", (e) => e.preventDefault());
+      dot.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.wrapHighlight(p.emoji);
+      });
+    }
+  }
+
+  private mountNativeEditor(hostEl: HTMLElement): boolean {
+    const BaseEditor = resolveScrollableMarkdownEditorCtor(this.app);
+    if (!BaseEditor) return false;
+    try {
+      const applyNow = () => this.dismiss(true);
+      const cancelNow = () => this.dismiss(false);
+
+      class BatchInlineEditor extends BaseEditor {
+        buildLocalExtensions(): unknown[] {
+          const parentExts = super.buildLocalExtensions?.() ?? [];
+          return [
+            ...parentExts,
+            Prec.highest(
+              keymap.of([
+                {
+                  key: "Mod-Enter",
+                  run: () => {
+                    applyNow();
+                    return true;
+                  },
+                },
+                {
+                  key: "Escape",
+                  run: () => {
+                    if (hasOpenObsidianPopup()) return false;
+                    cancelNow();
+                    return true;
+                  },
+                },
+              ])
+            ),
+          ];
+        }
+      }
+
+      const owner: Record<string, unknown> = { app: this.app };
+      const instance = new BatchInlineEditor(this.app, hostEl, owner);
+      owner.editMode = instance;
+      owner.editor = (instance as unknown as { editor?: unknown }).editor;
+      instance.set("");
+      this.nativeEditor = instance;
+      window.requestAnimationFrame(() => instance.cm?.focus());
+      return true;
+    } catch {
+      hostEl.empty();
+      return false;
+    }
+  }
+
+  private togglePrefix(prefix: "- [ ] " | "- "): void {
+    const cm = this.nativeEditor?.cm;
+    if (cm) {
+      const sel = cm.state.selection.main;
+      const line = cm.state.doc.lineAt(sel.from);
+      const hasIt = line.text.startsWith(prefix);
+      const next = hasIt ? line.text.slice(prefix.length) : `${prefix}${line.text}`;
+      cm.dispatch({
+        changes: { from: line.from, to: line.to, insert: next },
+        selection: { anchor: line.from + next.length },
+      });
+      cm.focus();
+      return;
+    }
+    this.insertText(prefix, 0);
+  }
+
+  private insertText(text: string, backOffset: number): void {
+    const cm = this.nativeEditor?.cm;
+    if (cm) {
+      const sel = cm.state.selection.main;
+      cm.dispatch({
+        changes: { from: sel.from, to: sel.to, insert: text },
+        selection: { anchor: sel.from + text.length - backOffset },
+      });
+      cm.focus();
+      return;
+    }
+    if (this.fallbackTextarea) {
+      const ta = this.fallbackTextarea;
+      const start = ta.selectionStart;
+      const end = ta.selectionEnd;
+      ta.value = ta.value.slice(0, start) + text + ta.value.slice(end);
+      const pos = start + text.length - backOffset;
+      ta.setSelectionRange(pos, pos);
+      ta.focus();
+    }
+  }
+
+  private wrapHighlight(emoji: string): void {
+    const open = `==${emoji}`;
+    const close = "==";
+    const cm = this.nativeEditor?.cm;
+    if (cm) {
+      const sel = cm.state.selection.main;
+      const selected = cm.state.sliceDoc(sel.from, sel.to);
+      const insert = `${open}${selected}${close}`;
+      const pos = selected ? sel.from + insert.length : sel.from + open.length;
+      cm.dispatch({
+        changes: { from: sel.from, to: sel.to, insert },
+        selection: { anchor: pos },
+      });
+      cm.focus();
+      return;
+    }
+    this.insertText(`${open}${close}`, close.length);
+  }
+
+  private getContent(): string {
+    if (this.nativeEditor) return this.nativeEditor.get();
+    if (this.fallbackTextarea) return this.fallbackTextarea.value;
+    return "";
+  }
+
+  public close(): void {
+    this.dismiss(false);
+  }
+
+  private dismiss(apply: boolean): void {
+    if (!this.isOpen || this.isClosing) return;
+    if (apply && this.selectedTabIds.size === 0) {
+      new Notice(this.strings.batchSelectOneNotice);
+      return;
+    }
+    this.isClosing = true;
+    this.isOpen = false;
+
+    if (this.outsidePointerHandler) {
+      document.removeEventListener(
+        "pointerdown",
+        this.outsidePointerHandler,
+        true
+      );
+      this.outsidePointerHandler = null;
+    }
+    if (this.keydownCaptureHandler) {
+      window.removeEventListener("keydown", this.keydownCaptureHandler, true);
+      this.keydownCaptureHandler = null;
+    }
+
+    if (
+      document.activeElement instanceof HTMLElement &&
+      this.popoverEl?.contains(document.activeElement)
+    ) {
+      document.activeElement.blur();
+    }
+
+    const content = this.getContent();
+
+    if (this.nativeEditor) {
+      try {
+        this.nativeEditor.destroy();
+      } catch {
+        // ignore
+      }
+      this.nativeEditor = null;
+    }
+    this.fallbackTextarea = null;
+
+    if (this.scope) {
+      this.app.keymap.popScope(this.scope);
+      this.scope = null;
+    }
+    if (this.popoverEl) {
+      this.popoverEl.remove();
+      this.popoverEl = null;
+    }
+
+    if (apply) {
+      this.onApply({
+        content,
+        colorAction: this.colorAction,
+        colorId: this.selectedColorId,
+        targetTabIds: Array.from(this.selectedTabIds),
+      });
+    } else {
+      this.onCancel();
+    }
   }
 }

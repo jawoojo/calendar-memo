@@ -3,6 +3,10 @@
 
 export type DateKey = string; // YYYY-MM-DD (로컬 타임존 기준)
 
+export type UiLanguage = "auto" | "ko" | "en";
+
+export const ALL_TABS_ID = "__all__";
+
 export type LunarDisplayMode = "off" | "periodic" | "always";
 
 export type RecurringFrequency =
@@ -101,6 +105,8 @@ export interface CountryOption {
 export interface CalendarMemoSettings {
   tabs: CalendarTab[];
   activeTabId: string;
+  /** UI 표시 언어 ('auto' = 옵시디언 언어 감지, 'ko' = 한국어, 'en' = English) */
+  uiLanguage: UiLanguage;
   /** 주 시작 요일: 0=일요일, 1=월요일 */
   weekStartsOn: 0 | 1;
   /** 음력 표시 모드: periodic(1일/15일) | always(매일) | off */
@@ -159,6 +165,7 @@ export const DEFAULT_SETTINGS: CalendarMemoSettings = {
     },
   ],
   activeTabId: DEFAULT_TAB_ID,
+  uiLanguage: "auto",
   weekStartsOn: 0,
   lunarDisplay: "periodic",
   showAnniversaries: true,

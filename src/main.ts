@@ -1,10 +1,13 @@
 import { Notice, Plugin, TFolder, WorkspaceLeaf } from "obsidian";
 import {
+  ALL_TABS_ID,
   CalendarMemoSettings,
   CountryOption,
   DEFAULT_SETTINGS,
   DEFAULT_TAB_ID,
+  UiLanguage,
 } from "./types";
+import { UiStrings, getStrings } from "./i18n";
 import { KoreanCalendarService } from "./calendar/koreanCalendar";
 import {
   CURATED_COUNTRIES,
@@ -31,6 +34,10 @@ export default class CalendarMemoPlugin extends Plugin {
 
   private inFlightHolidayFetches = new Set<string>();
   private failedHolidayFetches = new Set<string>();
+
+  t(): UiStrings {
+    return getStrings(this.settings.uiLanguage);
+  }
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -163,6 +170,12 @@ export default class CalendarMemoPlugin extends Plugin {
         typeof loaded?.holidayCountry === "string" && loaded.holidayCountry
           ? loaded.holidayCountry
           : DEFAULT_SETTINGS.holidayCountry,
+      uiLanguage:
+        loaded?.uiLanguage === "ko" ||
+        loaded?.uiLanguage === "en" ||
+        loaded?.uiLanguage === "auto"
+          ? (loaded.uiLanguage as UiLanguage)
+          : DEFAULT_SETTINGS.uiLanguage,
       useLocalHolidayName:
         typeof loaded?.useLocalHolidayName === "boolean"
           ? loaded.useLocalHolidayName
@@ -174,7 +187,13 @@ export default class CalendarMemoPlugin extends Plugin {
           : {},
     };
 
-    if (!this.settings.tabs.some((t) => t.id === this.settings.activeTabId)) {
+    const isAllModeAllowed =
+      this.settings.activeTabId === ALL_TABS_ID &&
+      this.settings.tabs.length > 1;
+    if (
+      !isAllModeAllowed &&
+      !this.settings.tabs.some((t) => t.id === this.settings.activeTabId)
+    ) {
       this.settings.activeTabId = this.settings.tabs[0]?.id ?? DEFAULT_TAB_ID;
     }
   }
