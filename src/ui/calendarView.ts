@@ -200,6 +200,24 @@ export class CalendarMemoView extends ItemView {
     });
     this.gridScrollEl.addEventListener("keydown", (e) => this.onGridKeyDown(e));
 
+    // [ID 5.5.1] 캘린더 뷰 전역 Tab / Shift+Tab 폴더 탭 전환
+    // -> 브라우저 기본 Tab 포커스 이동(툴바 버튼 순회)을 막고 캘린더 폴더 탭 간 빠른 순환 전환을 제공함.
+    //    (팝오버 편집기·입력창 활성 중이거나 Ctrl/Cmd/Alt 조합 시에는 원래 동작을 유지함)
+    this.rootEl.addEventListener(
+      "keydown",
+      (e: KeyboardEvent) => {
+        if (e.key !== "Tab" || e.ctrlKey || e.metaKey || e.altKey) return;
+        if (this.activePopover?.isActive()) return;
+        const activeTag = (document.activeElement?.tagName ?? "").toLowerCase();
+        if (activeTag === "input" || activeTag === "textarea") return;
+
+        e.preventDefault();
+        e.stopPropagation();
+        this.cycleFolderTab(e.shiftKey ? -1 : 1);
+      },
+      true
+    );
+
     this.globalPointerUpHandler = () => {
       this.isDraggingSelection = false;
     };
@@ -251,6 +269,17 @@ export class CalendarMemoView extends ItemView {
         this.originWeekStart
       );
     this.rebuildAll(focusDate);
+  }
+
+  /**
+   * 외부 명령어("열기 / 화면으로 이동") 호출 시 그리드로 즉시 키보드 포커스를 되돌림.
+   */
+  public focusGrid(): void {
+    window.requestAnimationFrame(() => {
+      if (!this.activePopover?.isActive()) {
+        this.gridScrollEl?.focus({ preventScroll: true });
+      }
+    });
   }
 
   /**
@@ -367,6 +396,23 @@ export class CalendarMemoView extends ItemView {
     this.renderTabBar();
     this.reloadAllRenderedCells();
     this.gridScrollEl.focus({ preventScroll: true });
+  }
+
+  /**
+   * [ID 5.5.1] Tab / Shift+Tab으로 등록된 캘린더 폴더 탭을 순환 전환함.
+   */
+  private cycleFolderTab(delta: 1 | -1): void {
+    const tabs = this.plugin.settings.tabs;
+    if (tabs.length <= 1) {
+      this.gridScrollEl.focus({ preventScroll: true });
+      return;
+    }
+    const currentIdx = Math.max(
+      0,
+      tabs.findIndex((t) => t.id === this.plugin.settings.activeTabId)
+    );
+    const nextIdx = (currentIdx + delta + tabs.length) % tabs.length;
+    void this.switchTab(tabs[nextIdx].id);
   }
 
   private buildToolbar(parentEl: HTMLElement): void {
@@ -549,6 +595,10 @@ export class CalendarMemoView extends ItemView {
     window.requestAnimationFrame(() => {
       this.scrollRowIntoView(targetCoord.row, "center");
       this.updateVisibleMonthIndicator();
+      // 뷰를 열자마자 클릭 없이도 방향키·Tab·Enter 탐색이 즉시 동작하도록 그리드에 포커스 부여
+      if (!this.activePopover?.isActive()) {
+        this.gridScrollEl.focus({ preventScroll: true });
+      }
     });
   }
 

@@ -5,7 +5,12 @@ export type DateKey = string; // YYYY-MM-DD (로컬 타임존 기준)
 
 export type LunarDisplayMode = "off" | "periodic" | "always";
 
-export type RecurringFrequency = "daily" | "weekly" | "monthly" | "businessDay";
+export type RecurringFrequency =
+  | "daily"
+  | "weekly"
+  | "monthly"
+  | "yearly"
+  | "businessDay";
 
 export type PopoverSizePreset = "small" | "medium" | "large" | "custom";
 
@@ -41,7 +46,9 @@ export interface RecurringEvent {
   frequency: RecurringFrequency;
   /** 매주 반복 시 요일 배열 (0=일 ~ 6=토) */
   weekdays?: number[];
-  /** 매월 반복 시 일자 (1~31, 해당 월 말일 초과 시 말일로 보정) */
+  /** 매년 반복 시 월 (1~12) */
+  monthOfYear?: number;
+  /** 매월·매년 반복 시 일자 (1~31, 해당 월 말일 초과 시 말일로 보정) */
   dayOfMonth?: number;
   /**
    * 영업일 기준 반복 모드:
@@ -79,6 +86,18 @@ export interface CustomHoliday {
   isHoliday: boolean;
 }
 
+// [ID 2.5] 해외 공휴일 로컬 캐시 엔트리 (국가 코드 -> 연도 -> 공휴일 배열)
+export interface CachedHolidayEntry {
+  date: DateKey;
+  name: string;
+  localName: string;
+}
+
+export interface CountryOption {
+  code: string;
+  name: string;
+}
+
 export interface CalendarMemoSettings {
   tabs: CalendarTab[];
   activeTabId: string;
@@ -86,8 +105,14 @@ export interface CalendarMemoSettings {
   weekStartsOn: 0 | 1;
   /** 음력 표시 모드: periodic(1일/15일) | always(매일) | off */
   lunarDisplay: LunarDisplayMode;
-  /** 대한민국 주요 기념일 표시 여부 */
+  /** 대한민국 주요 기념일 표시 여부 (KR 선택 시 적용) */
   showAnniversaries: boolean;
+  /** 공휴일 국가 코드 ('KR' = 내장 한국 오프라인, 'NONE' = 끄기, 그 외 ISO 2자리 코드 = Nager.Date 캐시) */
+  holidayCountry: string;
+  /** 해외 공휴일 표기 시 현지어 이름 우선 사용 여부 (false이면 영문명 표시) */
+  useLocalHolidayName: boolean;
+  /** 해외 공휴일 로컬 캐시: cachedCountryHolidays[countryCode][year] */
+  cachedCountryHolidays: Record<string, Record<string, CachedHolidayEntry[]>>;
   /** 한 화면(뷰포트)에 표시할 주(Row) 수 */
   visibleWeeksPerViewport: number;
   /** 편집 팝오버 크기 설정 (소/중/대 프리셋 또는 드래그 커스텀 크기) */
@@ -137,6 +162,9 @@ export const DEFAULT_SETTINGS: CalendarMemoSettings = {
   weekStartsOn: 0,
   lunarDisplay: "periodic",
   showAnniversaries: true,
+  holidayCountry: "KR",
+  useLocalHolidayName: true,
+  cachedCountryHolidays: {},
   visibleWeeksPerViewport: 5,
   popoverSize: {
     preset: "medium",

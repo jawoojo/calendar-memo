@@ -73,6 +73,16 @@ export function doesRecurringEventOccurOn(
       return day === effectiveDay;
     }
 
+    // [ID 3.1.1] 매년 반복 (월·일 지정, 윤년 2/29는 평년 2/28로 안전 보정)
+    case "yearly": {
+      const targetMonth = event.monthOfYear ?? 1;
+      if (month !== targetMonth) return false;
+      const targetDay = event.dayOfMonth ?? 1;
+      const lastDay = getDaysInMonth(year, month);
+      const effectiveDay = Math.min(targetDay, lastDay);
+      return day === effectiveDay;
+    }
+
     case "businessDay": {
       if (!isBusinessDay(dateKey)) return false;
       const nth = event.businessDayNth ?? 0;
@@ -156,6 +166,8 @@ export function describeRecurringEvent(event: RecurringEvent): string {
     }
     case "monthly":
       return `매월 ${event.dayOfMonth ?? 1}일`;
+    case "yearly":
+      return `매년 ${event.monthOfYear ?? 1}월 ${event.dayOfMonth ?? 1}일`;
     case "businessDay": {
       const nth = event.businessDayNth ?? 0;
       if (nth === 0) return "매 영업일";

@@ -150,6 +150,17 @@ describe("RecurringEvents (daily, weekly, monthly, businessDay, scope)", () => {
         completedDates: [],
         excludedDates: [],
       },
+      {
+        id: "r4",
+        title: "연간 갱신",
+        frequency: "yearly",
+        monthOfYear: 2,
+        dayOfMonth: 29,
+        startDate: "2024-01-01",
+        scope: "all",
+        completedDates: [],
+        excludedDates: [],
+      },
     ];
 
     // 2026-03-01(일) 삼일절, 2026-03-02(월) 대체공휴일 -> 첫 영업일은 2026-03-03(화)!
@@ -158,9 +169,16 @@ describe("RecurringEvents (daily, weekly, monthly, businessDay, scope)", () => {
     expect(mar2.map((x) => x.event.id)).not.toContain("r2");
     expect(mar3.map((x) => x.event.id)).toContain("r2");
 
-    // 2026-02-28(토) 말일 루틴(31일 설정)은 28일에 보정 표시됨
+    // 2026-02-28(토) 말일 루틴(31일 설정) & 윤년 2/29 매년 반복 모두 2/28에 보정 표시됨
     const feb28 = getRecurringEventsForDate(events, "2026-02-28", "default", isBiz);
     expect(feb28.map((x) => x.event.id)).toContain("r3");
+    expect(feb28.map((x) => x.event.id)).toContain("r4");
+    expect(
+      getRecurringEventsForDate(events, "2028-02-29", "default", isBiz).map(
+        (x) => x.event.id
+      )
+    ).toContain("r4");
+    expect(describeRecurringEvent(events[3])).toBe("매년 2월 29일");
 
     // 2026-11 마지막 영업일은 2026-11-30(월) — work 탭에서만 보이고 default 탭엔 안 보임
     expect(
@@ -309,6 +327,46 @@ describe("Append paste merge & folder rename remapping", () => {
     // 다른 폴더나 볼트 루트는 변경되지 않아야 함
     expect(remapTabFolderPath("업무2", "업무", "아카이브/업무")).toBeNull();
     expect(remapTabFolderPath("", "업무", "아카이브/업무")).toBeNull();
+  });
+});
+
+describe("Multi-country cached holidays (preserving Korean offline engine)", () => {
+  it("uses cached foreign country holidays, respects localName toggle, and triggers lazy fetch for uncached years", () => {
+    const cal = new KoreanCalendarService();
+    const missingCalls: Array<{ code: string; year: number }> = [];
+    cal.setMissingYearHandler((code, year) => missingCalls.push({ code, year }));
+
+    const cache = {
+      JP: {
+        "2026": [
+          { date: "2026-01-01", name: "New Year's Day", localName: "元日" },
+          { date: "2026-11-23", name: "Labour Thanksgiving Day", localName: "勤労感謝の日" },
+        ],
+      },
+    };
+
+    // 일본(현지어 우선) 모드
+    cal.setHolidayCountryConfig("JP", true, cache);
+    const jpNov23 = cal.getDayMeta("2026-11-23", "off", true);
+    expect(jpNov23.isHoliday).toBe(true);
+    expect(jpNov23.holidayNames).toEqual(["勤労感謝の日"]);
+    expect(cal.isBusinessDay("2026-11-23")).toBe(false);
+    // 한국 전용 기념일(어버이날 5/8)은 일본 모드에서 표시되지 않아야 함
+    expect(cal.getDayMeta("2026-05-08", "off", true).anniversaryNames).toEqual([]);
+
+    // 영문명 모드 전환
+    cal.setHolidayCountryConfig("JP", false, cache);
+    expect(cal.getDayMeta("2026-11-23", "off", true).holidayNames).toEqual([
+      "Labour Thanksgiving Day",
+    ]);
+
+    // 미캐시 연도(2028) 조회 시 온디맨드 콜백 호출
+    cal.getDayMeta("2028-01-01", "off", true);
+    expect(missingCalls).toEqual([{ code: "JP", year: 2028 }]);
+
+    // 다시 KR로 복귀하면 기존 한국 오프라인 엔진 그대로 동작
+    cal.setHolidayCountryConfig("KR", true, cache);
+    expect(cal.getDayMeta("2026-03-02", "periodic", true).isHoliday).toBe(true);
   });
 });
 

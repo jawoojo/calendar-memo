@@ -403,7 +403,10 @@ export class RecurringEventsModal extends Modal {
     let title = editing?.title ?? "";
     let frequency: RecurringFrequency = editing?.frequency ?? "weekly";
     let weekdays = new Set<number>(editing?.weekdays ?? [1]);
-    let dayOfMonth = editing?.dayOfMonth ?? Number(this.defaultStartDate.slice(8, 10));
+    let monthOfYear =
+      editing?.monthOfYear ?? Number(this.defaultStartDate.slice(5, 7));
+    let dayOfMonth =
+      editing?.dayOfMonth ?? Number(this.defaultStartDate.slice(8, 10));
     let businessDayMode: "every" | "nth" | "last" =
       editing?.businessDayNth === -1
         ? "last"
@@ -463,6 +466,28 @@ export class RecurringEventsModal extends Modal {
               if (num >= 1 && num <= 31) dayOfMonth = num;
             })
           );
+      } else if (frequency === "yearly") {
+        new Setting(dynamicArea)
+          .setName("매년 월 / 일")
+          .setDesc("생일·기념일·연간 갱신일 등에 사용합니다. (2월 29일은 평년에 2월 28일로 보정)")
+          .addText((t) =>
+            t
+              .setPlaceholder("월 (1~12)")
+              .setValue(String(monthOfYear))
+              .onChange((v) => {
+                const num = Number(v);
+                if (num >= 1 && num <= 12) monthOfYear = num;
+              })
+          )
+          .addText((t) =>
+            t
+              .setPlaceholder("일 (1~31)")
+              .setValue(String(dayOfMonth))
+              .onChange((v) => {
+                const num = Number(v);
+                if (num >= 1 && num <= 31) dayOfMonth = num;
+              })
+          );
       } else if (frequency === "businessDay") {
         new Setting(dynamicArea)
           .setName("영업일 규칙")
@@ -497,6 +522,7 @@ export class RecurringEventsModal extends Modal {
         .addOption("daily", "매일")
         .addOption("weekly", "매주 (요일 지정)")
         .addOption("monthly", "매월 (일자 지정)")
+        .addOption("yearly", "매년 (월·일 지정)")
         .addOption("businessDay", "영업일 기준")
         .setValue(frequency)
         .onChange((v) => {
@@ -594,7 +620,11 @@ export class RecurringEventsModal extends Modal {
         title: trimmedTitle,
         frequency,
         weekdays: frequency === "weekly" ? Array.from(weekdays).sort() : undefined,
-        dayOfMonth: frequency === "monthly" ? dayOfMonth : undefined,
+        monthOfYear: frequency === "yearly" ? monthOfYear : undefined,
+        dayOfMonth:
+          frequency === "monthly" || frequency === "yearly"
+            ? dayOfMonth
+            : undefined,
         businessDayNth: resolvedBusinessNth,
         startDate: startDate || getTodayKey(),
         endDate: endDate.trim() || undefined,
@@ -647,7 +677,63 @@ export class CustomHolidaysModal extends Modal {
     contentEl.empty();
     contentEl.addClass("cm-modal");
 
-    contentEl.createEl("h2", { text: "커스텀 휴일 · 기념일 관리" });
+    contentEl.createEl("h2", { text: "국가 공휴일 · 커스텀 휴일 관리" });
+
+    // [ID 2.5.5] 캘린더 상단 '휴일' 버튼에서도 바로 국가를 전환할 수 있도록 단축 선택기 제공
+    const countryBox = contentEl.createDiv({ cls: "cm-form-box" });
+    const currentCountry = this.plugin.settings.holidayCountry || "KR";
+    const cachedYears = Object.keys(
+      this.plugin.settings.cachedCountryHolidays[currentCountry] ?? {}
+    ).sort();
+
+    new Setting(countryBox)
+      .setName("공휴일 국가 (Holiday Country)")
+      .setDesc(
+        currentCountry === "KR"
+          ? "대한민국 — 내장 오프라인 공휴일·음력 사용 중"
+          : currentCountry === "NONE"
+            ? "국가 공휴일 꺼짐 (아래 커스텀 휴일만 표시)"
+            : `해외 공휴일 로컬 캐시 (${
+                cachedYears.length > 0 ? cachedYears.join(", ") : "동기화 대기"
+              })`
+      )
+      .addDropdown((dd) => {
+        const hasCurrent = this.plugin.availableCountries.some(
+          (c) => c.code === currentCountry
+        );
+        for (const c of this.plugin.availableCountries) {
+          dd.addOption(c.code, c.name);
+        }
+        if (!hasCurrent) {
+          dd.addOption(currentCountry, currentCountry);
+        }
+        dd.setValue(currentCountry).onChange(async (v) => {
+          await this.plugin.setHolidayCountry(v);
+          this.onUpdated();
+          this.render();
+        });
+      })
+      .addButton((btn) =>
+        btn
+          .setButtonText("110+ 국가")
+          .setTooltip("전 세계 110개국 이상 전체 목록 불러오기")
+          .onClick(async () => {
+            btn.setDisabled(true);
+            try {
+              const list = await this.plugin.loadAllCountriesFromNager();
+              new Notice(`${list.length - 2}개 국가 목록을 불러왔습니다.`);
+              this.render();
+            } catch {
+              new Notice("전체 국가 목록을 불러오지 못했습니다.");
+              btn.setDisabled(false);
+            }
+          })
+      );
+
+    contentEl.createEl("h3", {
+      text: "커스텀 휴일 · 기념일 추가",
+      cls: "cm-section-heading",
+    });
 
     const formBox = contentEl.createDiv({ cls: "cm-form-box" });
     let name = "";

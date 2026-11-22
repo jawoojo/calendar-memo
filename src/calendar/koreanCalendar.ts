@@ -4,6 +4,7 @@ import {
   hasYear as coreHasYear,
 } from "@hangukit/holidays-core";
 import {
+  CachedHolidayEntry,
   CustomHoliday,
   DateKey,
   DayCalendarMeta,
@@ -62,10 +63,38 @@ export class KoreanCalendarService {
   >();
   private customHolidays: CustomHoliday[] = [];
 
+  // [ID 2.5.1] 다국가 공휴일 설정 (KR은 기존 오프라인 내장 로직 그대로 유지, 해외는 로컬 캐시 조회)
+  private holidayCountry = "KR";
+  private useLocalHolidayName = true;
+  private cachedCountryHolidays: Record<
+    string,
+    Record<string, CachedHolidayEntry[]>
+  > = {};
+  private onMissingCountryYear:
+    | ((countryCode: string, year: number) => void)
+    | null = null;
+
   setCustomHolidays(customHolidays: CustomHoliday[]): void {
     this.customHolidays = customHolidays;
     // 커스텀 휴일 변경 시 연도 캐시를 비워 즉시 반영
     this.yearCache.clear();
+  }
+
+  setHolidayCountryConfig(
+    countryCode: string,
+    useLocalName: boolean,
+    cachedCountryHolidays: Record<string, Record<string, CachedHolidayEntry[]>>
+  ): void {
+    this.holidayCountry = (countryCode || "KR").toUpperCase();
+    this.useLocalHolidayName = useLocalName;
+    this.cachedCountryHolidays = cachedCountryHolidays;
+    this.yearCache.clear();
+  }
+
+  setMissingYearHandler(
+    handler: ((countryCode: string, year: number) => void) | null
+  ): void {
+    this.onMissingCountryYear = handler;
   }
 
   /**
@@ -126,29 +155,45 @@ export class KoreanCalendarService {
     const holidays = new Map<DateKey, string[]>();
     const anniversaries = new Map<DateKey, string[]>();
 
-    // 1) 법정 공휴일 및 대체공휴일 계산
-    if (coreHasYear(year)) {
-      for (const entry of getCoreHolidays(year)) {
-        pushUnique(holidays, entry.date, entry.name);
+    // 1) 국가별 공휴일 및 기념일 분기 (KR은 기존 오프라인 엔진 100% 그대로 유지)
+    if (this.holidayCountry === "KR") {
+      if (coreHasYear(year)) {
+        for (const entry of getCoreHolidays(year)) {
+          pushUnique(holidays, entry.date, entry.name);
+        }
+      } else {
+        this.computeFallbackHolidaysForYear(year, holidays);
       }
-    } else {
-      this.computeFallbackHolidaysForYear(year, holidays);
-    }
 
-    // 2) 주요 양력 기념일
-    for (const item of SOLAR_ANNIVERSARIES) {
-      pushUnique(anniversaries, toDateKey(year, item.month, item.day), item.name);
-    }
+      // 한국 주요 양력 기념일
+      for (const item of SOLAR_ANNIVERSARIES) {
+        pushUnique(anniversaries, toDateKey(year, item.month, item.day), item.name);
+      }
 
-    // 3) 주요 음력 기념일
-    for (const item of LUNAR_ANNIVERSARIES) {
-      const solarKey = this.lunarToSolarKey(year, item.month, item.day, false);
-      if (solarKey && parseDateKey(solarKey).year === year) {
-        pushUnique(anniversaries, solarKey, item.name);
+      // 한국 주요 음력 기념일
+      for (const item of LUNAR_ANNIVERSARIES) {
+        const solarKey = this.lunarToSolarKey(year, item.month, item.day, false);
+        if (solarKey && parseDateKey(solarKey).year === year) {
+          pushUnique(anniversaries, solarKey, item.name);
+        }
+      }
+    } else if (this.holidayCountry !== "NONE") {
+      // [ID 2.5.1] 해외 국가: 로컬 캐시에서 조회하고 미캐시 연도는 백그라운드 온디맨드 동기화 요청
+      const yearBucket =
+        this.cachedCountryHolidays[this.holidayCountry]?.[String(year)];
+      if (yearBucket) {
+        for (const entry of yearBucket) {
+          const label = this.useLocalHolidayName
+            ? entry.localName || entry.name
+            : entry.name || entry.localName;
+          pushUnique(holidays, entry.date, label);
+        }
+      } else if (this.onMissingCountryYear) {
+        this.onMissingCountryYear(this.holidayCountry, year);
       }
     }
 
-    // 4) 사용자 커스텀 휴일 / 기념일 반영
+    // 4) 사용자 커스텀 휴일 / 기념일 반영 (모든 국가 설정에서 공통 적용)
     for (const ch of this.customHolidays) {
       if (ch.year !== undefined && ch.year !== year) continue;
       let targetKey: DateKey | null = null;
